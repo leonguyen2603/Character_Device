@@ -1,6 +1,6 @@
 ===================================API========================================
 
-----Phần 4.2.1: API cho Character Device Driver----
+---- Phần 1: API cho Character Device Driver ----
 
 	1. alloc_chrdev_region
 		a. Mô tả:
@@ -340,7 +340,7 @@
 			    return len;
 			}
 
-----Phần 4.2.2: API cho Platform Device và Platform Driver----
+---- Phần 2: API cho Platform Device và Platform Driver ----
 
 	1. platform_device_register
 		a. Mô tả:
@@ -640,3 +640,435 @@
 			    free_irq(irq, pdev);
 			    printk(KERN_INFO "IRQ freed\n");
 			}
+
+---- Phần 3: file_operations ----
+
+	1. Tổng quan
+		a. Cấu trúc struct file_operations (trích dẫn phần liên quan):
+			struct file_operations {
+			    struct module *owner; // Module sở hữu, thường là THIS_MODULE
+			    int (*open)(struct inode *, struct file *); // Mở thiết bị
+			    int (*release)(struct inode *, struct file *); // Đóng thiết bị
+			    ssize_t (*read)(struct file *, char __user *, size_t, loff_t *); // Đọc từ thiết bị
+			    ssize_t (*write)(struct file *, const char __user *, size_t, loff_t *); // Ghi vào thiết bị
+			    long (*unlocked_ioctl)(struct file *, unsigned int, unsigned long); // Điều khiển thiết bị
+			    // Các hàm khác như poll, mmap, fasync, ...
+			};
+		b. Cách gán:
+			static struct file_operations fops = {
+			    .owner = THIS_MODULE,
+			    .open = dev_open,
+			    .release = dev_release,
+			    .read = dev_read,
+			    .write = dev_write,
+			    .unlocked_ioctl = dev_ioctl,
+			};
+		c. Lưu ý chung:
+			- Các hàm này là callback được kernel gọi khi user space thực hiện system call.
+			- User space tương tác qua tệp thiết bị (như /dev/my_device), được tạo bởi device_create với major/minor number.
+			- Cần dùng copy_to_user/copy_from_user để truyền dữ liệu an toàn giữa kernel và user space.
+			
+	2. Chi tiết các Lệnh
+	2.1. open
+		a. Mô tả:
+			- Được gọi khi user space mở tệp thiết bị (qua system call open(2), ví dụ: open("/dev/my_device", O_RDWR)).
+			- Dùng để khởi tạo thiết bị, kiểm tra quyền truy cập, hoặc lưu trữ thông tin trạng thái.
+		b. Cú pháp:
+			- int (*open)(struct inode *inode, struct file *file);
+		c. Tham số:
+			- struct inode *inode:
+				- Loại: Con trỏ tới struct inode.
+				- Mô tả: Đại diện cho inode của tệp thiết bị trong hệ thống tệp (VFS).
+				- Trường quan trọng:
+					- i_rdev: Chứa dev_t (major/minor number) của thiết bị.
+						unsigned int major = MAJOR(inode->i_rdev);
+						unsigned int minor = MINOR(inode->i_rdev);
+					- i_cdev: Con trỏ tới struct cdev của thiết bị (nếu là character device).
+			- struct file *file:
+				- Loại: Con trỏ tới struct file.
+				- Mô tả: Đại diện cho tệp đang được mở, chứa trạng thái mở (như chế độ đọc/ghi).
+				- Trường quan trọng:
+					- f_mode: Chế độ mở (FMODE_READ, FMODE_WRITE).
+					- private_data: Con trỏ để driver lưu dữ liệu riêng (ví dụ: trạng thái thiết bị).
+		d. Giá trị trả về:
+			0: Thành công.
+			< 0: Lỗi (ví dụ: -EBUSY nếu thiết bị đang bận, -EPERM nếu không có quyền).
+		e. Ví dụ sử dụng:
+			static int dev_open(struct inode *inode, struct file *file) {
+			    unsigned int minor = MINOR(inode->i_rdev);
+			    printk(KERN_INFO "Device opened, minor: %d\n", minor);
+			    // Lưu trạng thái
+			    file->private_data = kmalloc(sizeof(struct my_device_state), GFP_KERNEL);
+			    if (!file->private_data) return -ENOMEM;
+			    return 0;
+			}
+		f. Lưu ý kỹ thuật:
+			- Kiểm tra minor number: Dùng MINOR(inode->i_rdev) để phân biệt thiết bị nếu driver hỗ trợ nhiều minor number.
+			- Quản lý tài nguyên: Nếu cấp phát bộ nhớ (như kmalloc), đảm bảo giải phóng trong release.
+			- Kiểm tra quyền: Dùng f_mode để xác nhận chế độ mở (đọc, ghi, hoặc cả hai).
+			- Đồng bộ: Nếu thiết bị chỉ cho phép một tiến trình mở, dùng mutex hoặc biến trạng thái.
+
+	2.2. release
+		a. Mô tả:
+			- Được gọi khi user space đóng tệp thiết bị (qua close(2) hoặc khi tiến trình kết thúc).
+			- Dùng để giải phóng tài nguyên, đặt lại trạng thái thiết bị.
+		b. Cú pháp:
+			- int (*release)(struct inode *inode, struct file *file);
+		c. Tham số:
+			- struct inode *inode: Như mô tả ở open.
+			- struct file *file: Như mô tả ở open, chứa private_data được thiết lập trong open.
+		d. Giá trị trả về:
+			- 0: Thành công.
+			- < 0: Lỗi (hiếm khi dùng, vì close(2) không báo lỗi về user space).
+		e. Ví dụ sử dụng:
+			static int dev_release(struct inode *inode, struct file *file) {
+			    unsigned int minor = MINOR(inode->i_rdev);
+			    printk(KERN_INFO "Device closed, minor: %d\n", minor);
+			    // Giải phóng tài nguyên
+			    kfree(file->private_data);
+			    file->private_data = NULL;
+			    return 0;
+			}
+		f. Lưu ý kỹ thuật:
+			- Giải phóng tài nguyên: Đảm bảo giải phóng mọi thứ được cấp phát trong open (như private_data).
+			- Đồng bộ: Nếu dùng mutex trong open, đảm bảo trạng thái được đặt lại.
+			- Không giả định trạng thái: release có thể được gọi ngay cả khi open thất bại, nên kiểm tra private_data trước khi giải phóng.
+			- Hoàn tất tác vụ: Đảm bảo thiết bị ở trạng thái ổn định (ví dụ: dừng truyền dữ liệu).
+
+	2.3. read
+		a. Mô tả:
+			- Được gọi khi user space đọc dữ liệu từ thiết bị (qua read(2)).
+			- Dùng để truyền dữ liệu từ kernel (hoặc phần cứng) về user space.
+		b. Cú pháp:
+			- ssize_t (*read)(struct file *file, char __user *buf, size_t count, loff_t *offset);
+		c. Tham số:
+			- struct file *file:
+				- Loại: Con trỏ tới struct file.
+				- Mô tả: Tệp đang được đọc, chứa private_data và f_mode.
+			- char __user *buf:
+				- Loại: Con trỏ tới bộ đệm user space.
+				- Mô tả: Nơi lưu dữ liệu được đọc.
+				- Macro __user: Chỉ thị con trỏ thuộc user space, cần copy_to_user để truyền dữ liệu.
+			- size_t count:
+				- Loại: Kích thước (byte).
+				- Mô tả: Số byte user space yêu cầu đọc.
+			- loff_t *offset:
+				- Loại: Con trỏ tới long long (64-bit).
+				- Mô tả: Vị trí đọc hiện tại trong tệp. Thường không dùng cho character device (vì không có khái niệm offset cố định).
+		d. Giá trị trả về:
+			- >= 0: Số byte đã đọc thành công.
+			- < 0: Lỗi (ví dụ: -EFAULT nếu copy_to_user thất bại, -EINVAL nếu tham số không hợp lệ).
+			- 0: Đã đến cuối dữ liệu (EOF, hiếm dùng cho character device).
+		e. Ví dụ sử dụng:
+			static char kernel_buffer[1024] = "Hello from kernel";
+			static ssize_t dev_read(struct file *file, char __user *buf, size_t count, loff_t *offset) {
+			    size_t len = min(count, strlen(kernel_buffer));
+			    if (copy_to_user(buf, kernel_buffer, len)) {
+			        return -EFAULT;
+			    }
+			    return len;
+			}
+		f. Lưu ý kỹ thuật:
+			- Dùng copy_to_user: Luôn dùng copy_to_user để truyền dữ liệu, kiểm tra lỗi.
+			- Giới hạn kích thước: Đảm bảo không đọc quá kích thước bộ đệm kernel (min(count, buffer_size)).
+			- Đồng bộ: Dùng spinlock hoặc mutex nếu bộ đệm được chia sẻ.
+				spin_lock(&my_lock);
+				copy_to_user(buf, kernel_buffer, len);
+				spin_unlock(&my_lock);
+			- Không dùng offset: Character device thường không cần offset, bỏ qua hoặc trả về lỗi nếu offset != 0.
+			- Non-blocking I/O: Nếu file->f_flags & O_NONBLOCK, trả về -EAGAIN nếu không có dữ liệu ngay.
+
+	2.4. write
+		a. Mô tả:
+			- Được gọi khi user space ghi dữ liệu vào thiết bị (qua write(2)).
+			- Dùng để nhận dữ liệu từ user space và xử lý (lưu vào bộ đệm hoặc gửi đến phần cứng).
+		b. Cú pháp:
+			- ssize_t (*write)(struct file *file, const char __user *buf, size_t count, loff_t *offset);
+		c. Tham số:
+			- struct file *file: Như mô tả ở read.
+			- const char __user *buf:
+				- Loại: Con trỏ tới bộ đệm user space.
+				- Mô tả: Chứa dữ liệu được gửi từ user space.
+				- Macro __user: Như mô tả ở read.
+			- size_t count: Số byte user space muốn ghi.
+			- loff_t *offset: Như mô tả ở read, thường không dùng.
+		d. Giá trị trả về:
+			- >= 0: Số byte đã ghi thành công.
+			- < 0: Lỗi (ví dụ: -EFAULT, -EINVAL).
+		e. Ví dụ sử dụng:
+			static char kernel_buffer[1024];
+			static ssize_t dev_write(struct file *file, const char __user *buf, size_t count, loff_t *offset) {
+			    if (count > sizeof(kernel_buffer)) count = sizeof(kernel_buffer);
+			    if (copy_from_user(kernel_buffer, buf, count)) {
+			        return -EFAULT;
+			    }
+			    printk(KERN_INFO "Received: %.*s\n", (int)count, kernel_buffer);
+			    return count;
+			}
+		f. Lưu ý kỹ thuật:
+			- Dùng copy_from_user: Kiểm tra lỗi khi sao chép dữ liệu.
+			- Giới hạn kích thước: Giới hạn count để tránh tràn bộ đệm.
+			- Đồng bộ: Bảo vệ bộ đệm bằng spinlock/mutex nếu có truy cập đồng thời.
+			- Non-blocking I/O: Trả về -EAGAIN nếu thiết bị không sẵn sàng và O_NONBLOCK được đặt.
+			- Xử lý dữ liệu: Lưu hoặc gửi dữ liệu đến phần cứng, đảm bảo trạng thái thiết bị nhất quán.
+
+		2.5. unlocked_ioctl
+			a. Mô tả:
+				- Được gọi khi user space thực hiện lệnh điều khiển thiết bị (qua ioctl(2)).
+				- Dùng để thực hiện các thao tác đặc biệt (như cấu hình thiết bị, lấy trạng thái).
+			b. Cú pháp:
+				- long (*unlocked_ioctl)(struct file *file, unsigned int cmd, unsigned long arg);
+			c. Tham số:
+				- struct file *file: Như mô tả ở read.
+				- unsigned int cmd:
+					- Loại: Số nguyên không dấu.
+					- Mô tả: Lệnh điều khiển, do user space định nghĩa (thường trong file header như my_device.h).
+					- Macro liên quan:
+						_IO(type, nr): Lệnh không tham số.
+						_IOR(type, nr, datatype): Lệnh đọc dữ liệu.
+						_IOW(type, nr, datatype): Lệnh ghi dữ liệu.
+						_IOWR(type, nr, datatype): Lệnh đọc và ghi.
+							Ví dụ:
+							#define MY_IOCTL_SET _IOW('M', 1, int)
+				- unsigned long arg:
+					- Loại: Số nguyên không dấu.
+					- Mô tả: Tham số hoặc con trỏ tới dữ liệu user space, tùy thuộc vào cmd.
+			d. Giá trị trả về:
+				- >= 0: Thành công (thường là 0 hoặc số byte xử lý).
+				- < 0: Lỗi (ví dụ: -EINVAL nếu cmd không hợp lệ, -EFAULT nếu copy_to_user/copy_from_user thất bại).
+			e. Ví dụ sử dụng:
+				#define MY_IOCTL_SET _IOW('M', 1, int)
+				#define MY_IOCTL_GET _IOR('M', 2, int)
+
+				static long dev_ioctl(struct file *file, unsigned int cmd, unsigned long arg) {
+				    int value;
+				    switch (cmd) {
+				        case MY_IOCTL_SET:
+				            if (copy_from_user(&value, (int __user *)arg, sizeof(value))) {
+				                return -EFAULT;
+				            }
+				            printk(KERN_INFO "Set value: %d\n", value);
+				            break;
+				        case MY_IOCTL_GET:
+				            value = 42; // Giá trị giả lập
+				            if (copy_to_user((int __user *)arg, &value, sizeof(value))) {
+				                return -EFAULT;
+				            }
+				            break;
+				        default:
+				            return -EINVAL;
+				    }
+				    return 0;
+				}
+			f. Lưu ý kỹ thuật:
+				- Định nghĩa lệnh: Dùng macro _IO* để tạo lệnh duy nhất, tránh xung đột.
+				- Kiểm tra cmd: Dùng switch để xử lý từng lệnh, trả về -EINVAL nếu lệnh không hợp lệ.
+				- Truyền dữ liệu: Dùng copy_to_user/copy_from_user nếu arg là con trỏ user space.
+				- Đồng bộ: Bảo vệ trạng thái thiết bị bằng mutex nếu ioctl thay đổi cấu hình.
+				- Kích thước dữ liệu: Kiểm tra kích thước dữ liệu trong _IOR/_IOW để tránh lỗi bộ nhớ.
+			g. Ví dụ user space:
+				#include <fcntl.h>
+				#include <sys/ioctl.h>
+				#include "my_device.h"
+
+				int main() {
+				    int fd = open("/dev/my_device", O_RDWR);
+				    int value = 123;
+				    ioctl(fd, MY_IOCTL_SET, &value);
+				    ioctl(fd, MY_IOCTL_GET, &value);
+				    printf("Got value: %d\n", value);
+				    close(fd);
+				    return 0;
+				}
+
+	2.6. Các Lệnh Khác (Bổ sung)
+		a. poll:
+			- Mô tả: Hỗ trợ poll(2) hoặc select(2) để kiểm tra trạng thái thiết bị (có dữ liệu để đọc, có thể ghi, v.v.).
+			- Cú pháp:
+				- unsigned int (*poll)(struct file *file, struct poll_table_struct *wait);
+			- Tham số:
+				- file: Như trên.
+				- wait: Con trỏ tới poll_table_struct, dùng để đăng ký chờ sự kiện.
+			- Giá trị trả về: Bitmask (POLLIN, POLLOUT, POLLERR, v.v.).
+			- Ví dụ:
+				static unsigned int dev_poll(struct file *file, poll_table_struct *wait) {
+				    unsigned int mask = 0;
+				    poll_wait(file, &my_wait_queue, wait);
+				    if (data_available) mask |= POLLIN;
+				    if (can_write) mask |= POLLOUT;
+				    return mask;
+				}
+			- Lưu ý:
+				- Dùng poll_wait để đăng ký chờ, không thực hiện chờ trực tiếp.
+				- Cập nhật trạng thái thiết bị (như hàng đợi dữ liệu) trước khi trả về.
+
+		b. mmap:
+			- Mô tả: Ánh xạ bộ nhớ thiết bị vào không gian địa chỉ user space (qua mmap(2)).
+			- Cú pháp:
+				- int (*mmap)(struct file *file, struct vm_area_struct *vma);
+			- Tham số:
+				- file: Như trên.
+				- vma: Chứa thông tin vùng bộ nhớ user space.
+			- Giá trị trả về: 0 nếu thành công, < 0 nếu lỗi.
+			- Lưu ý: Hiếm dùng cho character device, chủ yếu dùng cho thiết bị có bộ nhớ lớn (như GPU).
+
+		c. fasync:
+			- Mô tả: Hỗ trợ thông báo bất đồng bộ (qua fcntl(2) với F_SETFL và FASYNC).
+			- Cú pháp:
+				- int (*fasync)(int fd, struct file *file, int on);
+			- Tham số:
+				- fd: File descriptor.
+				- file: Như trên.
+				- on: 1 để bật, 0 để tắt.
+			- Giá trị trả về: 0 nếu thành công, < 0 nếu lỗi.
+			- Lưu ý: Dùng kill_fasync để gửi tín hiệu khi có sự kiện.
+
+	3. Lưu ý Chung khi Triển khai
+		a. Đồng bộ:
+			- Dùng spinlock (spin_lock) cho vùng mã ngắn trong ngữ cảnh ngắt.
+			- Dùng mutex (mutex_lock) cho ngữ cảnh tiến trình, nơi có thể ngủ.
+			- Ví dụ:
+				static DEFINE_MUTEX(my_mutex);
+				static ssize_t dev_write(struct file *file, const char __user *buf, size_t count, loff_t *off) {
+				    mutex_lock(&my_mutex);
+				    // Xử lý dữ liệu
+				    mutex_unlock(&my_mutex);
+				    return count;
+				}
+		b. Quản lý lỗi:
+			- Luôn kiểm tra lỗi từ copy_to_user/copy_from_user (-EFAULT).
+			- Trả về mã lỗi chuẩn (-EINVAL, -EBUSY, -ENOMEM, v.v.) để user space xử lý.
+		c. Minor number:
+			- Dùng MINOR(inode->i_rdev) trong open để phân biệt thiết bị nếu driver hỗ trợ nhiều minor number.
+			- Lưu trạng thái riêng cho từng minor number trong file->private_data.
+		d. Non-blocking I/O:
+			- Kiểm tra file->f_flags & O_NONBLOCK và trả về -EAGAIN nếu không thể xử lý ngay.
+		e. Ví dụ:
+			- if (file->f_flags & O_NONBLOCK && !data_available) return -EAGAIN;
+		f. Hiệu năng:
+			- Tối ưu hóa bộ đệm kernel để giảm sao chép dữ liệu.
+			- Tránh xử lý nặng trong các hàm như read/write.
+
+	4. Ví dụ Driver Hoàn Chỉnh
+		#include <linux/module.h>
+		#include <linux/fs.h>
+		#include <linux/cdev.h>
+		#include <linux/device.h>
+		#include <linux/uaccess.h>
+		#include <linux/mutex.h>
+
+		#define DEVICE_NAME "my_device"
+		#define BUFFER_SIZE 1024
+
+		static dev_t dev_num;
+		static struct cdev cdev;
+		static struct class *dev_class;
+		static char kernel_buffer[BUFFER_SIZE];
+		static DEFINE_MUTEX(my_mutex);
+
+		static int dev_open(struct inode *inode, struct file *file) {
+		    printk(KERN_INFO "Device opened, minor: %d\n", MINOR(inode->i_rdev));
+		    return 0;
+		}
+
+		static int dev_release(struct inode *inode, struct file *file) {
+		    printk(KERN_INFO "Device closed, minor: %d\n", MINOR(inode->i_rdev));
+		    return 0;
+		}
+
+		static ssize_t dev_read(struct file *file, char __user *buf, size_t count, loff_t *offset) {
+		    size_t len;
+		    mutex_lock(&my_mutex);
+		    len = min(count, strlen(kernel_buffer));
+		    if (copy_to_user(buf, kernel_buffer, len)) {
+		        mutex_unlock(&my_mutex);
+		        return -EFAULT;
+		    }
+		    mutex_unlock(&my_mutex);
+		    return len;
+		}
+
+		static ssize_t dev_write(struct file *file, const char __user *buf, size_t count, loff_t *offset) {
+		    mutex_lock(&my_mutex);
+		    if (count > BUFFER_SIZE) count = BUFFER_SIZE;
+		    if (copy_from_user(kernel_buffer, buf, count)) {
+		        mutex_unlock(&my_mutex);
+		        return -EFAULT;
+		    }
+		    kernel_buffer[count] = '\0'; // Kết thúc chuỗi
+		    printk(KERN_INFO "Received: %.*s\n", (int)count, kernel_buffer);
+		    mutex_unlock(&my_mutex);
+		    return count;
+		}
+
+		#define MY_IOCTL_SET _IOW('M', 1, int)
+		#define MY_IOCTL_GET _IOR('M', 2, int)
+
+		static long dev_ioctl(struct file *file, unsigned int cmd, unsigned long arg) {
+		    int value;
+		    switch (cmd) {
+		        case MY_IOCTL_SET:
+		            if (copy_from_user(&value, (int __user *)arg, sizeof(value))) {
+		                return -EFAULT;
+		            }
+		            printk(KERN_INFO "Set value: %d\n", value);
+		            break;
+		        case MY_IOCTL_GET:
+		            value = 42;
+		            if (copy_to_user((int __user *)arg, &value, sizeof(value))) {
+		                return -EFAULT;
+		            }
+		            break;
+		        default:
+		            return -EINVAL;
+		    }
+		    return 0;
+		}
+
+		static struct file_operations fops = {
+		    .owner = THIS_MODULE,
+		    .open = dev_open,
+		    .release = dev_release,
+		    .read = dev_read,
+		    .write = dev_write,
+		    .unlocked_ioctl = dev_ioctl,
+		};
+
+		static int __init my_driver_init(void) {
+		    if (alloc_chrdev_region(&dev_num, 0, 1, DEVICE_NAME) < 0) {
+		        printk(KERN_ERR "Failed to allocate device number\n");
+		        return -1;
+		    }
+		    cdev_init(&cdev, &fops);
+		    cdev.owner = THIS_MODULE;
+		    if (cdev_add(&cdev, dev_num, 1) < 0) {
+		        unregister_chrdev_region(dev_num, 1);
+		        return -1;
+		    }
+		    dev_class = class_create(THIS_MODULE, "my_class");
+		    if (IS_ERR(dev_class)) {
+		        cdev_del(&cdev);
+		        unregister_chrdev_region(dev_num, 1);
+		        return PTR_ERR(dev_class);
+		    }
+		    device_create(dev_class, NULL, dev_num, NULL, DEVICE_NAME);
+		    printk(KERN_INFO "Device initialized\n");
+		    return 0;
+		}
+
+		static void __exit my_driver_exit(void) {
+		    device_destroy(dev_class, dev_num);
+		    class_destroy(dev_class);
+		    cdev_del(&cdev);
+		    unregister_chrdev_region(dev_num, 1);
+		    printk(KERN_INFO "Device removed\n");
+		}
+
+		module_init(my_driver_init);
+		module_exit(my_driver_exit);
+
+		MODULE_LICENSE("GPL");
+		MODULE_AUTHOR("Your Name");
+		MODULE_DESCRIPTION("Simple Character Device Driver");
+
+	
