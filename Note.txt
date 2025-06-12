@@ -1,0 +1,255 @@
+============================ NOTE ==========================
+
+----- 1. Những API nào có chức năng có thể thay thế cho nhau? -----
+	a. Character Device Driver
+		- alloc_chrdev_region vs register_chrdev_region:
+			- Chức năng: Cả hai đều cấp phát device number (major/minor) cho thiết bị ký tự.
+			- Khác biệt:
+				- alloc_chrdev_region: Cấp phát động (kernel tự chọn major number khả dụng).
+					- alloc_chrdev_region(&dev_num, 0, 1, "my_device");
+				- register_chrdev_region: Cấp phát tĩnh (chỉ định major/minor cụ thể).
+					- dev_t dev = MKDEV(250, 0);
+					  register_chrdev_region(dev, 1, "my_device");
+			- Khi nào thay thế:
+				- Dùng alloc_chrdev_region khi không cần cố định major number (phổ biến hơn, tránh xung đột).
+				- Dùng register_chrdev_region khi cần major number cụ thể (ví dụ: tương thích với phần cứng cũ).
+			- Lưu ý: register_chrdev_region yêu cầu kiểm tra xem major number đã được sử dụng chưa (xem /proc/devices).
+
+----- 2. Những API nào thường được dùng chung với nhau? -----
+
+*** 2.1 Character Device Driver ***
+
+~~ Nhóm 1: Đăng ký và quản lý thiết bị ký tự (alloc_chrdev_region, cdev_init, cdev_add, unregister_chrdev_region, cdev_del) ~~
+	a. Mục đích: Khởi tạo và đăng ký thiết bị ký tự với kernel.
+	b. Cách dùng chung:
+		- alloc_chrdev_region cấp phát device number.
+		- cdev_init khởi tạo struct cdev với file_operations.
+		- cdev_add thêm thiết bị vào kernel.
+		- cdev_del và unregister_chrdev_region dọn dẹp khi gỡ driver.
+	c. Ví dụ:
+		static dev_t dev_num;
+		static struct cdev cdev;
+		static struct file_operations fops = { /* ... */ };
+
+		static int __init my_driver_init(void) {
+		    alloc_chrdev_region(&dev_num, 0, 1, "my_device");
+		    cdev_init(&cdev, &fops);
+		    cdev_add(&cdev, dev_num, 1);
+		    return 0;
+		}
+
+		static void __exit my_driver_exit(void) {
+		    cdev_del(&cdev);
+		    unregister_chrdev_region(dev_num, 1);
+		}
+
+~~ Nhóm 2: Tạo giao diện user space (class_create, device_create, class_destroy, device_destroy): ~~
+	a. Mục đích: Tạo class và tệp thiết bị trong /dev để user space truy cập.
+	b. Cách dùng chung:
+		class_create tạo class trong /sys/class.
+		device_create tạo tệp thiết bị trong /dev.
+		device_destroy và class_destroy dọn dẹp khi gỡ driver.
+	c. Ví dụ:
+		static struct class *dev_class;
+
+		static int __init my_driver_init(void) {
+		    dev_class = class_create(THIS_MODULE, "my_class");
+		    device_create(dev_class, NULL, dev_num, NULL, "my_device");
+		    return 0;
+		}
+
+		static void __exit my_driver_exit(void) {
+		    device_destroy(dev_class, dev_num);
+		    class_destroy(dev_class);
+		}
+
+~~ Nhóm 3: Truyền dữ liệu user-kernel (copy_to_user, copy_from_user): ~~
+	a. Mục đích: Truyền dữ liệu an toàn giữa kernel và user space trong các hàm read, write, ioctl.
+	b. Cách dùng chung:
+		copy_from_user trong write hoặc ioctl để lấy dữ liệu từ user space.
+		copy_to_user trong read hoặc ioctl để gửi dữ liệu về user space.
+	c. Ví dụ:
+		static char kernel_buffer[1024];
+
+		static ssize_t dev_read(struct file *file, char __user *buf, size_t len, loff_t *off) {
+		    if (copy_to_user(buf, kernel_buffer, len)) {
+		        return -EFAULT;
+		    }
+		    return len;
+		}
+
+		static ssize_t dev_write(struct file *file, const char __user *buf, size_t len, loff_t *off) {
+		    if (copy_from_user(kernel_buffer, buf, len)) {
+		        return -EFAULT;
+		    }
+		    return len;
+		}
+
+*** 2.2 Platform Device/Driver ***
+
+~~ Nhóm 1: Đăng ký thiết bị và driver (platform_device_register, platform_driver_register, platform_device_unregister, platform_driver_unregister): ~~
+	a. Mục đích: Đăng ký platform device và driver để kernel khớp chúng.
+	b. Cách dùng chung:
+		- platform_device_register đăng ký thiết bị.
+		- platform_driver_register đăng ký driver.
+		- platform_device_unregister và platform_driver_unregister dọn dẹp.
+	c. Ví dụ:
+		static struct platform_device my_device = { /* ... */ };
+		static struct platform_driver my_driver = { /* ... */ };
+
+		static int __init my_driver_init(void) {
+		    platform_device_register(&my_device);
+		    return platform_driver_register(&my_driver);
+		}
+
+		static void __exit my_driver_exit(void) {
+		    platform_driver_unregister(&my_driver);
+		    platform_device_unregister(&my_device);
+		}
+
+~~ Nhóm 2: Truy cập tài nguyên phần cứng (platform_get_resource, platform_get_irq, ioremap, iounmap): ~~
+	a. Mục đích: Lấy thông tin tài nguyên (bộ nhớ, IRQ) và ánh xạ để truy cập phần cứng.
+	b. Cách dùng chung:
+		platform_get_resource lấy vùng bộ nhớ.
+		platform_get_irq lấy số IRQ.
+		ioremap ánh xạ bộ nhớ phần cứng.
+		iounmap hủy ánh xạ khi gỡ driver.
+	c. Ví dụ:
+		static void __iomem *base_addr;
+
+		static int my_probe(struct platform_device *pdev) {
+		    struct resource *res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+		    base_addr = ioremap(res->start, resource_size(res));
+		    if (!base_addr) return -ENOMEM;
+		    return 0;
+		}
+
+		static int my_remove(struct platform_device *pdev) {
+		    iounmap(base_addr);
+		    return 0;
+		}
+
+~~ Nhóm 3: Quản lý ngắt (platform_get_irq, request_irq, free_irq): ~~
+	a. Mục đích: Đăng ký và xử lý ngắt từ phần cứng.
+	b. Cách dùng chung:
+		platform_get_irq lấy số IRQ.
+		request_irq đăng ký hàm xử lý ngắt.
+		free_irq giải phóng ngắt khi gỡ driver.
+	c. Ví dụ:
+		static int my_probe(struct platform_device *pdev) {
+		    int irq = platform_get_irq(pdev, 0);
+		    if (irq < 0) return irq;
+		    return request_irq(irq, my_irq_handler, IRQF_SHARED, "my-serial", pdev);
+		}
+
+		static int my_remove(struct platform_device *pdev) {
+		    int irq = platform_get_irq(pdev, 0);
+		    free_irq(irq, pdev);
+		    return 0;
+		}
+
+----- 3. Khi dùng chung, cần lưu ý gì? -----
+
+*** 3.1 Character Device Driver ***
+
+~~ Nhóm 1: Đăng ký và quản lý thiết bị ký tự: ~~
+	a. Thứ tự:
+		- alloc_chrdev_region để cấp device number.
+		- cdev_init để khởi tạo struct cdev.
+		- cdev_add để thêm thiết bị vào kernel.
+	b. Khi gỡ: cdev_del trước, rồi unregister_chrdev_region.
+	c. Lưu ý:
+		- Kiểm tra lỗi: Luôn kiểm tra giá trị trả về của alloc_chrdev_region và cdev_add để xử lý lỗi (ví dụ: -EBUSY).
+		- Dọn dẹp đúng thứ tự: Nếu cdev_add thất bại, gọi unregister_chrdev_region để tránh rò rỉ tài nguyên.
+			if (cdev_add(&cdev, dev_num, 1) < 0) {
+			    unregister_chrdev_region(dev_num, 1);
+			    return -1;
+			}
+		- Gán cdev.owner: Đặt cdev.owner = THIS_MODULE sau cdev_init để tránh gỡ module khi thiết bị đang sử dụng.
+		- Không gọi lại alloc_chrdev_region: Nếu đã cấp phát, không gọi lại trừ khi đã giải phóng bằng unregister_chrdev_region.
+
+~~ Nhóm 2: Tạo giao diện user space: ~~
+	a. Thứ tự:
+		- class_create để tạo class.
+		- device_create để tạo tệp thiết bị.
+	b. Khi gỡ: device_destroy trước, rồi class_destroy.
+	c. Lưu ý:
+		- Kiểm tra lỗi: Dùng IS_ERR để kiểm tra kết quả của class_create và device_create.
+			dev_class = class_create(THIS_MODULE, "my_class");
+			if (IS_ERR(dev_class)) return PTR_ERR(dev_class);
+		- Dọn dẹp đầy đủ: Nếu device_create thất bại, gọi class_destroy trước khi thoát.
+		- Tên thiết bị duy nhất: Đảm bảo tên trong device_create (ví dụ: "my_device") không xung đột với thiết bị khác trong /dev.
+		- Tương thích udev: Đảm bảo hệ thống có udev để tự động tạo /dev/my_device sau device_create.
+
+~~ Nhóm 3: Truyền dữ liệu user-kernel: ~~
+	a. Thứ tự: Không có thứ tự cố định, nhưng thường:
+		- copy_from_user trong write hoặc ioctl trước khi xử lý dữ liệu.
+		- copy_to_user trong read hoặc ioctl sau khi chuẩn bị dữ liệu.
+	b. Lưu ý:
+		- Kiểm tra lỗi: Luôn kiểm tra giá trị trả về (> 0 là số byte không sao chép được, trả về -EFAULT).
+		- Kích thước hợp lệ: Đảm bảo len không vượt quá kích thước bộ đệm kernel để tránh tràn bộ nhớ.
+			if (len > sizeof(kernel_buffer)) len = sizeof(kernel_buffer);
+		- Kiểm tra con trỏ user: Đảm bảo con trỏ user space (buf) hợp lệ, vì copy_to_user/copy_from_user tự kiểm tra và trả lỗi nếu không hợp lệ.
+		- Đồng bộ: Nếu bộ đệm kernel được chia sẻ, dùng spinlock hoặc mutex để tránh truy cập đồng thời.
+			spin_lock(&my_lock);
+			copy_from_user(kernel_buffer, buf, len);
+			spin_unlock(&my_lock);
+
+*** 3.2 Platform Device/Driver ***
+
+~~ Nhóm 1: Đăng ký thiết bị và driver: ~~
+	a. Thứ tự:
+		- platform_device_register để đăng ký thiết bị.
+		- platform_driver_register để đăng ký driver (có thể gọi trước nếu thiết bị từ Device Tree).
+	b. Khi gỡ: platform_driver_unregister trước, rồi platform_device_unregister.
+	c. Lưu ý:
+		- Khớp thiết bị-driver: Đảm bảo platform_device.name khớp với platform_driver.driver.name hoặc of_match_table.
+		- Kiểm tra lỗi: Kiểm tra giá trị trả về của platform_device_register và platform_driver_register.
+		- Device Tree: Nếu dùng Device Tree, không cần platform_device_register thủ công, nhưng platform_driver_register vẫn cần thiết.
+		- Dọn dẹp: Gọi platform_driver_unregister trước để đảm bảo hàm remove được gọi trước khi gỡ thiết bị.
+
+~~ Nhóm 2: Truy cập tài nguyên phần cứng: ~~
+	a. Thứ tự:
+		- platform_get_resource để lấy tài nguyên.
+		- platform_get_irq để lấy IRQ (nếu cần).
+		- ioremap để ánh xạ bộ nhớ.
+		- iounmap khi gỡ driver.
+	b. Lưu ý:
+		- Kiểm tra NULL: Kiểm tra kết quả của platform_get_resource (NULL nếu không có tài nguyên).
+		- Kích thước tài nguyên: Dùng resource_size(res) để lấy kích thước vùng bộ nhớ cho ioremap.
+			base_addr = ioremap(res->start, resource_size(res));
+		- Hủy ánh xạ: Luôn gọi iounmap trong hàm remove hoặc khi probe thất bại.
+		- Managed API: Xem xét dùng devm_ioremap để tự động hủy ánh xạ, giảm nguy cơ quên iounmap.
+
+~~ Nhóm 3: Quản lý ngắt: ~~
+	a. Thứ tự:
+		- platform_get_irq để lấy số IRQ.
+		- request_irq để đăng ký hàm xử lý.
+		free_irq khi gỡ driver.
+	b. Lưu ý:
+		- Kiểm tra lỗi: Kiểm tra giá trị trả về của platform_get_irq (< 0 là lỗi) và request_irq.
+		- Đồng bộ dev_id: Đảm bảo dev_id trong request_irq và free_irq giống nhau.
+			request_irq(irq, my_irq_handler, IRQF_SHARED, "my-serial", pdev);
+			free_irq(irq, pdev);
+		- IRQF_SHARED: Nếu dùng IRQF_SHARED, đảm bảo hàm xử lý ngắt kiểm tra xem ngắt có thuộc về thiết bị của mình không.
+			static irqreturn_t my_irq_handler(int irq, void *dev_id) {
+			    if (!is_my_device_interrupt()) return IRQ_NONE;
+			    return IRQ_HANDLED;
+			}
+		- Managed API: Dùng devm_request_irq để tự động giải phóng, nhưng không gọi free_irq thủ công nếu đã dùng devm_request_irq.
+
+----- Tóm tắt -----
+	a. API thay thế:
+		- alloc_chrdev_region ↔ register_chrdev_region.
+		- ioremap ↔ devm_ioremap, request_irq ↔ devm_request_irq (biến thể managed).
+		- Các API khác không có thay thế trực tiếp do chức năng chuyên biệt.
+	b. API dùng chung:
+		- Character Device: alloc_chrdev_region + cdev_init + cdev_add + dọn dẹp; class_create + device_create + dọn dẹp; copy_to_user + copy_from_user.
+		- Platform Device/Driver: platform_device_register + platform_driver_register + dọn dẹp; 
+								  platform_get_resource + platform_get_irq + ioremap + dọn dẹp; 
+								  platform_get_irq + request_irq + dọn dẹp.
+	c. Lưu ý khi dùng chung:
+		- Tuân thủ thứ tự gọi (khởi tạo trước, dọn dẹp sau).
+		- Kiểm tra lỗi và dọn dẹp tài nguyên trong các nhánh lỗi.
+		- Đảm bảo đồng bộ khi truy cập tài nguyên chia sẻ (dùng spinlock/mutex).
+		- Sử dụng managed API (devm_*) để giảm nguy cơ rò rỉ tài nguyên.
