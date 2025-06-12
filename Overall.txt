@@ -1,0 +1,246 @@
+==========Phần 1: Các loại thiết bị trong Linux (Type of Device in Linux)==========
+
+----1.1. Tổng quan về thiết bị trong Linux----
+	Trong Linux, các thiết bị được biểu diễn dưới dạng tệp đặc biệt (special files) trong thư mục /dev. Điều này cho phép các chương trình ở user space tương tác với phần cứng thông qua các system call như read(), write(), ioctl(). Linux phân loại thiết bị thành ba loại chính:
+
+	Character Devices (Thiết bị ký tự): Truyền dữ liệu tuần tự, từng byte.
+	Block Devices (Thiết bị khối): Truyền dữ liệu theo khối, hỗ trợ truy cập ngẫu nhiên.
+	Network Devices (Thiết bị mạng): Xử lý kết nối mạng, không xuất hiện dưới dạng tệp /dev.
+	Ngoài ra, còn có Pseudo Devices (Thiết bị ảo) hoạt động như thiết bị nhưng không liên kết với phần cứng thật.
+
+----1.2. Chi tiết từng loại thiết bị----
++++1.2.1. Character Devices+++
+	a. Đặc điểm:
+	Truyền dữ liệu tuần tự (sequential access), không có bộ đệm lớn như block devices.
+	Dữ liệu được xử lý byte-by-byte, không theo khối cố định.
+	Thường được sử dụng cho các thiết bị như bàn phím, chuột, cổng serial (UART).
+	Trong /dev, các tệp thiết bị ký tự có ký tự đầu tiên là c khi chạy lệnh ls -l. 
+	b. Ví dụ:
+		crw--w---- 1 root tty 4, 1 Feb 20 18:09 tty1
+		// Ở đây, c chỉ ra đây là character device, số 4, 1 là major và minor number (sẽ giải thích ở phần sau).
+	c. Ví dụ thực tế:
+		/dev/tty: Thiết bị terminal, dùng để nhập/xuất dữ liệu người dùng.
+		/dev/ser0: Cổng serial, thường dùng trong giao tiếp với thiết bị nhúng.
+	d. Character devices không có bộ đệm trong kernel (buffer cache) như block devices, do đó hiệu suất phụ thuộc vào cách driver xử lý dữ liệu.
+	e. Một số character devices hỗ trợ ioctl() để cấu hình hoặc kiểm soát thiết bị (ví dụ: đặt tốc độ baud rate cho UART).
++++1.2.2. Block Devices+++
+	a. Đặc điểm:
+		Truyền dữ liệu theo khối (block), thường là 512 bytes, 4 KB, v.v.
+		Hỗ trợ truy cập ngẫu nhiên (random access), nghĩa là có thể đọc/ghi tại bất kỳ vị trí nào trên thiết bị.
+		Thường dùng cho thiết bị lưu trữ như ổ cứng (HDD, SSD), USB, thẻ SD.
+		Trong /dev, các tệp block device có ký tự đầu tiên là b. 
+	b. Ví dụ:
+		brw-rw---- 1 root disk 8, 0 Apr 12 16:50 sda
+	c. Ví dụ thực tế:
+		/dev/sda: Ổ cứng chính.
+		/dev/sdb1: Phân vùng trên USB.
+	d. Mở rộng:
+		- Block devices sử dụng buffer cache trong kernel để tăng hiệu suất đọc/ghi.
+		- Các công cụ như dd hoặc mkfs thường được dùng để thao tác trực tiếp với block devices.
++++1.2.3. Network Devices+++
+	a. Đặc điểm:
+		Không xuất hiện dưới dạng tệp trong /dev, mà được quản lý bởi networking subsystem của kernel.
+		Được truy cập thông qua các công cụ như ip, ifconfig, ethtool.
+		Hỗ trợ giao tiếp mạng (Ethernet, Wi-Fi, v.v.).
+	b. Ví dụ thực tế:
+		- eth0: Giao diện Ethernet.
+		- wlan0: Giao diện Wi-Fi.
+	c. Mở rộng:
+		- Network devices trong Linux được quản lý bởi netdev subsystem, sử dụng cấu trúc struct net_device.
+		- Các driver mạng thường phức tạp hơn, hỗ trợ các tính năng như xử lý gói tin (packet), quản lý hàng đợi, và tối ưu hóa băng thông.
+
+----1.3. Device Number (Số thiết bị)----
+	a. Vai trò:
+		- Linux sử dụng device number (gồm major number và minor number) để ánh xạ thiết bị với driver tương ứng.
+		- Major number: Xác định driver nào sẽ xử lý thiết bị (ví dụ: tất cả tty devices có thể dùng chung major number).
+		- Minor number: Phân biệt các thiết bị cụ thể trong cùng một driver (ví dụ: tty1, tty2).
+	b. Cách xem:
+		- Dùng lệnh ls -l /dev để thấy major và minor number:
+			crw----- 1 root root 5, 1 Apr 12 16:50 console
+			// Ở đây, 5, 1 là major và minor number của /dev/console.
+		- Dùng cat /proc/devices để liệt kê các driver và major number:
+			Character devices:
+			1 mem
+			4 /dev/vc/0
+			4 tty
+			5 /dev/tty
+		- Mở rộng:
+			- Major number thường được cấp động (dynamic) hoặc tĩnh (static). Dynamic allocation được thực hiện qua alloc_chrdev_region().
+			- /proc/devices là một tệp ảo cung cấp thông tin về các thiết bị đã đăng ký trong kernel.
+
+==========Phần 2: Character Device và Character Device Driver==========
+
+----2.1. Character Device là gì?----
+	a. Định nghĩa:
+		- Character Device (thiết bị ký tự) là một loại thiết bị trong Linux xử lý dữ liệu dưới dạng luồng byte tuần tự (sequential byte stream), không sử dụng bộ đệm khối (block buffering) như block devices.
+		- Dữ liệu được đọc/ghi từng byte thông qua các system call như read(), write(), hoặc điều khiển bằng ioctl().
+		- Character devices thường đại diện cho các thiết bị phần cứng như bàn phím, chuột, cổng serial (UART), hoặc các thiết bị ảo như /dev/null.
+	b. Đặc điểm:
+		- Không có bộ đệm lớn: Không như block devices, character devices không sử dụng buffer cache trong kernel, dữ liệu được truyền trực tiếp.
+		- Truy cập tuần tự: Không hỗ trợ truy cập ngẫu nhiên (random access).
+		- Biểu diễn trong hệ thống: Xuất hiện dưới dạng tệp đặc biệt trong /dev với ký tự đầu tiên là c khi chạy ls -l. 
+		- Ví dụ:
+			crw-rw---- 1 root tty 4, 64 Apr 12 16:50 /dev/ttyS0
+			// Ở đây, c chỉ ra character device, 4, 64 là major và minor number.
+	c. Major và Minor Number:
+		- Major number: Xác định driver kernel nào sẽ xử lý thiết bị.
+		- Minor number: Phân biệt các thiết bị cụ thể trong cùng một driver.
+	d. Xem danh sách major number: cat /proc/devices.
+		Ví dụ thực tế:
+			/dev/ttyS0: Cổng serial, dùng để giao tiếp với modem hoặc thiết bị nhúng.
+			/dev/input/mouse0: Thiết bị chuột.
+			/dev/null: Thiết bị ảo, bỏ qua mọi dữ liệu ghi vào.
+	e. Mở rộng:
+		- Một số character devices hỗ trợ ioctl() để cấu hình phần cứng, ví dụ: đặt tốc độ baud rate cho cổng serial.
+		- Character devices có thể là buffered (có bộ đệm nhỏ trong driver) hoặc unbuffered (truyền trực tiếp).
+
+----2.2. Character Device Driver là gì?----
+	a. Định nghĩa:
+		- Character Device Driver là một kernel module (mô-đun kernel) cung cấp giao diện giữa ứng dụng user space và phần cứng (hoặc thiết bị ảo). Driver này xử lý các thao tác như đọc, ghi, hoặc điều khiển thiết bị thông qua các system call.
+	b. Vai trò:
+		- Cầu nối: Chuyển các yêu cầu từ user space (như write()) thành các lệnh điều khiển phần cứng.
+		- Xử lý dữ liệu: Đọc/ghi dữ liệu từ thiết bị hoặc bộ đệm nội bộ.
+		- Quản lý thiết bị: Khởi tạo, cấu hình, và dọn dẹp thiết bị.
+	c. Cấu trúc chính:
+		Driver được xây dựng dựa trên struct file_operations (fops), định nghĩa các hàm xử lý thao tác:
+			- open: Mở thiết bị.
+			- release: Đóng thiết bị.
+			- read: Đọc dữ liệu từ thiết bị.
+			- write: Ghi dữ liệu vào thiết bị.
+			- ioctl: Điều khiển thiết bị (tùy chọn).
+	d. Mở rộng:
+		- Driver có thể được tải động dưới dạng module (.ko) hoặc tích hợp vào kernel.
+		- Các driver phức tạp hơn có thể hỗ trợ ngắt (interrupts) hoặc DMA (Direct Memory Access) để tối ưu hóa hiệu suất.
+
+****Ioctl****
+----1. Định nghĩa----
+ioctl (input/output control) là một system call trong Linux được sử dụng để thực hiện các thao tác điều khiển đặc biệt trên thiết bị (character devices, block devices, hoặc các tệp khác) mà các system call thông thường như read() hoặc write() không thể thực hiện.
+Trong ngữ cảnh character device driver, ioctl cho phép ứng dụng user space gửi các lệnh cụ thể đến driver để cấu hình thiết bị, truy vấn trạng thái, hoặc thực hiện các hành động đặc biệt.
+
+----2. Vai trò----
+	- Điều khiển thiết bị: Ví dụ, đặt tốc độ baud rate cho cổng serial, bật/tắt chế độ echo trên terminal, hoặc reset thiết bị.
+	- Truy vấn thông tin: Lấy trạng thái thiết bị, kích thước bộ đệm, hoặc thông tin phần cứng.
+	- Tùy chỉnh hành vi: Thay đổi cách driver xử lý dữ liệu, ví dụ, chuyển đổi chế độ hoạt động của thiết bị.
+	- Cầu nối user space và kernel: Cho phép ứng dụng user space tương tác trực tiếp với driver mà không cần thêm giao diện.
+
+----3. Cách hoạt động của Ioctl----
+	a. Trong user space:
+		- Ứng dụng gọi ioctl(fd, CMD, arg) để gửi lệnh CMD và tham số arg đến driver.
+			- CMD là một số nguyên (thường được định nghĩa trong file header chung) để chỉ hành động cụ thể.
+			- arg có thể là một con trỏ (để truyền dữ liệu vào/ra) hoặc một giá trị số.
+		- Trong kernel space:
+			- Kernel gọi hàm unlocked_ioctl trong file_operations của driver, truyền vào:
+				- struct file *file: Đại diện cho thiết bị được mở.
+				- unsigned int cmd: Mã lệnh từ user space.
+				- unsigned long arg: Tham số từ user space.
+			- Driver xử lý cmd, thực hiện hành động tương ứng, và trả về kết quả.
+	b. Cơ chế truyền dữ liệu:
+		- Dữ liệu giữa user space và kernel space được truyền qua copy_to_user hoặc copy_from_user để đảm bảo an toàn.
+	c. Ví dụ:
+		- copy_from_user: Lấy dữ liệu từ user space (arg) vào kernel.
+		- copy_to_user: Gửi dữ liệu từ kernel về user space.
+	d. Mã lệnh (Command Code):
+		- cmd thường được định nghĩa bằng macro như _IO, _IOR, _IOW, _IOWR trong <linux/ioctl.h>:
+			- _IO(type, nr): Lệnh không truyền dữ liệu.
+			- _IOR(type, nr, datatype): Lệnh đọc dữ liệu từ kernel.
+			- _IOW(type, nr, datatype): Lệnh ghi dữ liệu vào kernel.
+			- _IOWR(type, nr, datatype): Lệnh đọc và ghi.
+				- type: Một số "magic" để tránh xung đột (thường là một ký tự, ví dụ 'C' cho driver của bạn).
+				- nr: Số thứ tự lệnh (0, 1, 2, ...).
+				- datatype: Kiểu dữ liệu của tham số arg.
+
+==========Phần 3: Platform Device và Platform Driver==========
+
+----3.1. Platform Device là gì?----
+	a. Định nghĩa:
+		- Platform Device là một loại thiết bị trong Linux đại diện cho các thiết bị phần cứng không tự phát hiện (non-discoverable). Không giống như USB hoặc PCI devices (có thể tự động phát hiện qua giao thức), platform devices cần được định nghĩa thủ công trong kernel thông qua board file hoặc Device Tree.
+		- Chúng thường được sử dụng trong các hệ thống nhúng (embedded systems), nơi phần cứng (như UART, I2C, SPI, GPIO) được tích hợp trực tiếp trên bo mạch (SoC - System on Chip).
+	b. Đặc điểm:
+		- Không tự phát hiện: Không có cơ chế plug-and-play, cần khai báo thông tin thiết bị (như địa chỉ bộ nhớ, IRQ) trong mã kernel hoặc Device Tree.
+		- Biểu diễn trong kernel: Được định nghĩa bằng cấu trúc struct platform_device.
+	c. Ví dụ thực tế:
+		- UART controller (cổng serial).
+		- I2C/SPI controller.
+		- GPIO pins trên Raspberry Pi hoặc các bo mạch nhúng khác.
+	d. Vị trí trong hệ thống:
+		- Thông tin platform device thường được lưu trong Device Tree (file .dts) hoặc mã nguồn kernel (board file).
+		- Khi kernel khởi động, nó đăng ký các platform devices với hệ thống.
+	e. Cấu trúc platform_device:
+		struct platform_device {
+		    const char *name; // Tên thiết bị, dùng để khớp với driver
+		    int id;           // ID thiết bị (nếu có nhiều thiết bị cùng loại)
+		    struct resource *resource; // Tài nguyên (bộ nhớ, IRQ, v.v.)
+		    unsigned int num_resources; // Số lượng tài nguyên
+		    void *dev.platform_data;   // Dữ liệu tùy chỉnh cho driver
+		    // Các trường khác...
+		};
+		Giải thích:
+			- name: Xác định loại thiết bị, ví dụ "serial-uart".
+			- resource: Mô tả tài nguyên phần cứng, như vùng bộ nhớ hoặc ngắt (IRQ).
+			- platform_data: Dữ liệu cấu hình bổ sung (tùy chọn).
+	f. Mở rộng:
+		- Trong các hệ thống hiện đại, Device Tree (file .dts) là cách phổ biến để mô tả platform devices, thay thế board file tĩnh.
+		- Ví dụ Device Tree cho UART:
+			serial@10000000 {
+			    compatible = "arm,pl011";
+			    reg = <0x10000000 0x1000>;
+			    interrupts = <0 12 4>;
+			    status = "okay";
+			};
+				- compatible: Chuỗi để khớp với driver.
+				- reg: Vùng bộ nhớ của thiết bị.
+				- interrupts: Thông tin ngắt.
+
+----3.2. Platform Driver là gì?---
+	a. Định nghĩa:
+		- Platform Driver là một kernel driver chịu trách nhiệm điều khiển một platform device. Nó cung cấp logic để khởi tạo, cấu hình, và tương tác với phần cứng được mô tả bởi platform device.
+		- Platform driver khớp với platform device dựa trên tên hoặc chuỗi compatible (trong Device Tree).
+	b. Vai trò:
+		Khởi tạo thiết bị: Thiết lập phần cứng (ví dụ: bật nguồn, cấu hình thanh ghi).
+		Xử lý ngắt: Đăng ký và xử lý các ngắt từ phần cứng.
+		Thực hiện thao tác: Cung cấp giao diện (như read, write, ioctl) để user space tương tác với thiết bị.
+		Dọn dẹp: Tắt thiết bị và giải phóng tài nguyên khi gỡ driver.
+	c. Cấu trúc platform_driver:
+		struct platform_driver {
+		    int (*probe)(struct platform_device *); // Gọi khi thiết bị khớp
+		    int (*remove)(struct platform_device *); // Gọi khi gỡ thiết bị
+		    void (*shutdown)(struct platform_device *); // Tắt thiết bị
+		    int (*suspend)(struct platform_device *, pm_message_t state); // Tiết kiệm năng lượng
+		    int (*resume)(struct platform_device *); // Phục hồi sau suspend
+		    struct device_driver driver; // Thông tin driver
+		    const struct of_device_id *of_match_table; // Bảng khớp Device Tree
+		};
+		Giải thích:
+			- probe: Hàm chính, khởi tạo thiết bị khi kernel tìm thấy platform device khớp.
+			- remove: Dọn dẹp khi thiết bị bị gỡ.
+			- of_match_table: Dùng để khớp với Device Tree (nếu có).
+	d. Mở rộng:
+		- Platform driver thường được viết dưới dạng kernel module (.ko), cho phép tải/gỡ động.
+		- Một driver có thể hỗ trợ nhiều platform devices (ví dụ: nhiều cổng UART trên cùng SoC).
+
+----3.3. Cơ chế khớp giữa Platform Device và Platform Driver----
+	a. Quá trình khớp:
+		Kernel phát hiện một platform device (qua Device Tree hoặc board file).
+		Kernel tìm platform driver có tên hoặc chuỗi compatible khớp với platform device.
+		Nếu khớp, kernel gọi hàm probe của driver, truyền vào struct platform_device.
+		Driver sử dụng thông tin từ platform_device (như tài nguyên, platform_data) để khởi tạo phần cứng.
+	b. Cách khớp:
+		- Dựa trên tên:
+			platform_device.name khớp với platform_driver.driver.name.
+		- Dựa trên Device Tree:
+			- compatible trong Device Tree khớp với of_match_table của driver.
+			- Ví dụ bảng khớp:
+				static const struct of_device_id my_driver_of_match[] = {
+				    { .compatible = "mycompany,serial-uart" },
+				    { /* sentinel */ }
+				};
+				MODULE_DEVICE_TABLE(of, my_driver_of_match);
+
+----3.5. So sánh Platform Device và Platform Driver----
+	Tiêu chí			Platform Device										Platform Driver
+	Định nghĩa			Mô tả phần cứng (tài nguyên, tên, v.v.).			Điều khiển phần cứng, cung cấp giao diện.
+	Biểu diễn			struct platform_device.								struct platform_driver.
+	Đăng ký				Qua Device Tree hoặc platform_device_register.		Qua platform_driver_register.
+	Vai trò				Cung cấp thông tin phần cứng.						Thực hiện logic (khởi tạo, đọc/ghi, ngắt).
+	Khớp				Dựa trên name hoặc compatible.						Dựa trên driver.name hoặc of_match_table
+

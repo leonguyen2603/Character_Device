@@ -1,0 +1,642 @@
+===================================API========================================
+
+----Phần 4.2.1: API cho Character Device Driver----
+
+	1. alloc_chrdev_region
+		a. Mô tả:
+			- Hàm này cấp phát động một hoặc nhiều device number (bao gồm major và minor number) cho thiết bị ký tự, đảm bảo không xung đột với các thiết bị khác trong hệ thống.
+			- Device number được sử dụng để ánh xạ thiết bị với driver trong kernel.
+		b. Cú pháp:
+			int alloc_chrdev_region(dev_t *dev, unsigned baseminor, unsigned count, const char *name);
+		c. Arguments:
+			- dev_t *dev:
+				- Loại: Con trỏ tới một biến kiểu dev_t.
+				- Mô tả: Lưu trữ device number được cấp phát (kết hợp major và minor number).
+				- Cấu trúc dev_t:
+					- dev_t là một kiểu dữ liệu 32-bit (trên hầu hết các kiến trúc), chia thành:
+						- Major number (12 bit): Xác định driver.
+						- Minor number (20 bit): Phân biệt các thiết bị cụ thể trong cùng driver.
+					- Các macro liên quan:
+						- MAJOR(dev_t dev): Trích xuất major number.
+						- MINOR(dev_t dev): Trích xuất minor number.
+						- MKDEV(int major, int minor): Tạo dev_t từ major và minor number.
+					- Ví dụ:
+						dev_t dev_num;
+						alloc_chrdev_region(&dev_num, 0, 1, "my_device");
+						printk(KERN_INFO "Major: %d, Minor: %d\n", MAJOR(dev_num), MINOR(dev_num));
+			- unsigned baseminor:
+				- Loại: Số nguyên không dấu.
+				- Mô tả: Minor number bắt đầu cho dải thiết bị. Thường đặt là 0 để kernel tự chọn minor number đầu tiên khả dụng.
+				- Ví dụ: Nếu baseminor = 5, kernel sẽ cố gắng cấp minor number từ 5 trở đi.
+			- unsigned count:
+				- Loại: Số nguyên không dấu.
+				- Mô tả: Số lượng device number cần cấp phát (tương ứng với số thiết bị).
+				- Ví dụ: Nếu count = 3, kernel cấp 3 minor number liên tiếp (ví dụ: 0, 6, 7).
+			- const char *name:
+				- Loại: Chuỗi ký tự.
+				- Mô tả: Tên thiết bị, hiển thị trong /proc/devices để dễ nhận diện.
+				- Ví dụ: "simple_char" sẽ xuất hiện trong /proc/devices.
+		d. Giá trị trả về:
+			- 0: Thành công.
+			- < 0: Lỗi (thường là -EBUSY nếu major number đã được sử dụng).
+		e. Ví dụ sử dụng:
+			#include <linux/fs.h>
+			static dev_t dev_num;
+			static int __init my_driver_init(void) {
+			    if (alloc_chrdev_region(&dev_num, 0, 1, "simple_char") < 0) {
+			        printk(KERN_ERR "Failed to allocate device number\n");
+			        return -EBUSY;
+			    }
+			    printk(KERN_INFO "Allocated Major: %d, Minor: %d\n", MAJOR(dev_num), MINOR(dev_num));
+			    return 0;
+			}
+	
+	2. unregister_chrdev_region
+		a. Mô tả:
+			- Giải phóng các device number đã được cấp bởi alloc_chrdev_region hoặc register_chrdev_region.
+		b. Cú pháp:
+			- void unregister_chrdev_region(dev_t from, unsigned count);
+		c. Arguments:
+			- dev_t from:
+				- Loại: Kiểu dev_t.
+				- Mô tả: Device number đầu tiên cần giải phóng (bao gồm major và minor number).
+				- Cấu trúc dev_t: Như mô tả ở alloc_chrdev_region, kết hợp major và minor number.
+			- unsigned count:
+				- Loại: Số nguyên không dấu.
+				- Mô tả: Số lượng device number cần giải phóng, phải khớp với count trong alloc_chrdev_region.
+		d. Giá trị trả về:
+			- Không có (void).
+		e. Ví dụ sử dụng:
+			static void __exit my_driver_exit(void) {
+			    unregister_chrdev_region(dev_num, 1);
+			    printk(KERN_INFO "Device number unregistered\n");
+			}
+
+	3. cdev_init
+		a. Mô tả:
+			- Khởi tạo cấu trúc struct cdev, liên kết nó với file_operations để định nghĩa các thao tác của thiết bị.
+		b. Cú pháp:
+			- void cdev_init(struct cdev *cdev, const struct file_operations *fops);
+		c. Arguments:
+			- struct cdev *cdev:
+				- Loại: Con trỏ tới cấu trúc struct cdev.
+				- Mô tả: Đại diện cho thiết bị ký tự trong kernel.
+				- Cấu trúc struct cdev:
+					struct cdev {
+					    struct kobject kobj; // Đối tượng kernel cho sysfs
+					    struct module *owner; // Module sở hữu (thường là THIS_MODULE)
+					    const struct file_operations *ops; // Con trỏ tới file_operations
+					    struct list_head list; // Danh sách liên kết
+					    dev_t dev; // Device number
+					    unsigned int count; // Số thiết bị
+					};
+					- kobj: Quản lý thiết bị trong /sys.
+					- owner: Ngăn gỡ module khi thiết bị đang sử dụng.
+					- ops: Con trỏ tới file_operations.
+			- const struct file_operations *fops:
+				- Loại: Con trỏ tới cấu trúc struct file_operations.
+				- Mô tả: Định nghĩa các hàm xử lý system call (open, read, write, ioctl, v.v.).
+				- Cấu trúc struct file_operations:
+					struct file_operations {
+					    struct module *owner; // Module sở hữu
+					    int (*open)(struct inode *, struct file *);
+					    int (*release)(struct inode *, struct file *);
+					    ssize_t (*read)(struct file *, char __user *, size_t, loff_t *);
+					    ssize_t (*write)(struct file *, const char __user *, size_t, loff_t *);
+					    long (*unlocked_ioctl)(struct file *, unsigned int, unsigned long);
+					    // Các hàm khác...
+	          		};
+		d. Giá trị trả về:
+			- Không có (void).
+		e. Ví dụ sử dụng:
+			#include <linux/cdev.h>
+			static struct cdev cdev;
+			static struct file_operations fops = {
+			    .open = dev_open,
+			    .release = dev_release,
+			    .read = dev_read,
+			    .write = dev_write,
+			};
+			static int __init my_driver_init(void) {
+			    cdev_init(&cdev, &fops);
+			    cdev.owner = THIS_MODULE;
+			    return 0;
+			}
+
+	4. cdev_add
+		a. Mô tả:
+			- Thêm thiết bị ký tự (struct cdev) vào hệ thống kernel, liên kết với device number và kích hoạt để user space truy cập.
+		b. Cú pháp:
+			- int cdev_add(struct cdev *p, dev_t dev, unsigned count);
+		c. Arguments:
+			- struct cdev *p:
+				- Loại: Con trỏ tới struct cdev.
+				- Mô tả: Cấu trúc đã được khởi tạo bằng cdev_init.
+				- Cấu trúc struct cdev: Như mô tả ở cdev_init.
+			- dev_t dev:
+				- Loại: Kiểu dev_t.
+				- Mô tả: Device number (major/minor) đã được cấp bởi alloc_chrdev_region.
+				- Cấu trúc dev_t: Như mô tả ở alloc_chrdev_region.
+			- unsigned count:
+				- Loại: Số nguyên không dấu.
+				- Mô tả: Số lượng minor number liên tiếp mà cdev quản lý.
+		d. Giá trị trả về:
+			- 0: Thành công.
+			- < 0: Lỗi (ví dụ: -EBUSY nếu device number đã được sử dụng).
+		e. Ví dụ sử dụng:
+			if (cdev_add(&cdev, dev_num, 1) < 0) {
+			    printk(KERN_ERR "Failed to add cdev\n");
+			    unregister_chrdev_region(dev_num, 1);
+			    return -1;
+			}
+
+	5. cdev_del
+		a. Mô tả:
+			- Xóa thiết bị ký tự khỏi hệ thống kernel, vô hiệu hóa truy cập từ user space.
+		b. Cú pháp:
+			- void cdev_del(struct cdev *p);
+		c. Arguments:
+			- struct cdev *p:
+				- Loại: Con trỏ tới struct cdev.
+				- Mô tả: Cấu trúc đã được thêm bằng cdev_add.
+				- Cấu trúc struct cdev: Như mô tả ở cdev_init.
+		d. Giá trị trả về:
+			- Không có (void).
+		e. Ví dụ sử dụng:
+			static void __exit my_driver_exit(void) {
+			    cdev_del(&cdev);
+			    printk(KERN_INFO "cdev removed\n");
+			}
+
+	6. class_create
+		a. Mô tả:
+			- Tạo một class trong /sys/class để quản lý thiết bị, hỗ trợ udev tự động tạo tệp trong /dev.
+		b. Cú pháp:
+			- struct class *class_create(struct module *owner, const char *name);
+		c. Arguments:
+			- struct module *owner:
+				- Loại: Con trỏ tới struct module.
+				- Mô tả: Module sở hữu class, thường là THIS_MODULE (macro định nghĩa module hiện tại).
+				- Cấu trúc struct module:
+					- Đại diện cho kernel module, chứa thông tin như tên, trạng thái, và tham chiếu.
+					- THIS_MODULE là macro trả về con trỏ tới module hiện tại.
+			- const char *name:
+				- Loại: Chuỗi ký tự.
+				- Mô tả: Tên của class, xuất hiện trong /sys/class.
+		d. Giá trị trả về:
+			- Con trỏ tới struct class nếu thành công.
+			- ERR_PTR(-errno) nếu thất bại (ví dụ: -ENOMEM nếu thiếu bộ nhớ).
+		e. Ví dụ sử dụng:
+			#include <linux/device.h>
+			static struct class *dev_class;
+			static int __init my_driver_init(void) {
+			    dev_class = class_create(THIS_MODULE, "simple_char_class");
+			    if (IS_ERR(dev_class)) {
+			        printk(KERN_ERR "Failed to create class\n");
+			        return PTR_ERR(dev_class);
+			    }
+			    return 0;
+			}
+
+	7. class_destroy
+		a. Mô tả:
+			- Hủy class đã tạo bằng class_create, dọn dẹp tài nguyên.
+		b. Cú pháp:
+			- void class_destroy(struct class *cls);
+		c. Arguments:
+			- struct class *cls:
+				- Loại: Con trỏ tới struct class.
+				- Mô tả: Class đã được tạo bởi class_create.
+				- Cấu trúc struct class:
+					struct class {
+					    const char *name; // Tên class
+					    struct module *owner; // Module sở hữu
+					    // Các trường khác...
+					};
+		d. Giá trị trả về:
+			- Không có (void).
+		e. Ví dụ sử dụng:
+			static void __exit my_driver_exit(void) {
+			    class_destroy(dev_class);
+			    printk(KERN_INFO "Class destroyed\n");
+			}
+
+	8. device_create
+		a. Mô tả:
+			- Tạo tệp thiết bị trong /dev và mục tương ứng trong /sys, cho phép user space truy cập.
+		b. Cú pháp:
+			- struct device *device_create(struct class *class, struct device *parent, dev_t devt, void *drvdata, const char *fmt, ...);
+		c. Arguments:
+			- struct class *class:
+				- Loại: Con trỏ tới struct class.
+				- Mô tả: Class đã tạo bằng class_create.
+				- Cấu trúc struct class: Như mô tả ở class_destroy.
+			- struct device *parent:
+				- Loại: Con trỏ tới struct device.
+				- Mô tả: Thiết bị cha (thường là NULL nếu không có cha).
+				- Cấu trúc struct device:
+					struct device {
+					    struct device *parent; // Thiết bị cha
+					    struct kobject kobj; // Đối tượng kernel
+					    const char *init_name; // Tên thiết bị
+					    // Các trường khác...
+					};
+			- dev_t devt:
+				- Loại: Kiểu dev_t.
+				- Mô tả: Device number của thiết bị.
+				- Cấu trúc dev_t: Như mô tả ở alloc_chrdev_region.
+			- void *drvdata:
+				- Loại: Con trỏ void.
+				- Mô tả: Dữ liệu tùy chỉnh cho driver (thường là NULL nếu không cần).
+			- const char *fmt, ...:
+				- Loại: Chuỗi định dạng và các tham số biến đổi.
+				- Mô tả: Tên tệp thiết bị trong /dev (ví dụ: "simple_char_dev").
+		d. Giá trị trả về:
+			- Con trỏ tới struct device nếu thành công.
+			- ERR_PTR(-errno) nếu lỗi (ví dụ: -ENOMEM).
+		e. Ví dụ sử dụng:
+			if (IS_ERR(device_create(dev_class, NULL, dev_num, NULL, "simple_char_dev"))) {
+			    printk(KERN_ERR "Failed to create device\n");
+			    return -1;
+			}
+
+	9. device_destroy
+		a. Mô tả:
+			- Hủy tệp thiết bị trong /dev và mục trong /sys.
+		b. Cú pháp:
+			- void device_destroy(struct class *class, dev_t devt);
+		c. Arguments:
+			- struct class *class:
+				- Loại: Con trỏ tới struct class.
+				- Mô tả: Class chứa thiết bị.
+				- Cấu trúc struct class: Như mô tả trước.
+			- dev_t devt:
+				- Loại: Kiểu dev_t.
+				- Mô tả: Device number của thiết bị.
+				- Cấu trúc dev_t: Như trước.
+		d. Giá trị trả về:
+			- Không có (void).
+		e. Ví dụ sử dụng:
+			static void __exit my_driver_exit(void) {
+			    device_destroy(dev_class, dev_num);
+			    printk(KERN_INFO "Device destroyed\n");
+			}
+
+	10. copy_to_user
+		a. Mô tả:
+			- Sao chép dữ liệu từ kernel space sang user space một cách an toàn.
+		b. Cú pháp:
+			- unsigned long copy_to_user(void __user *to, const void *from, unsigned long n);
+		c. Arguments:
+			- void __user *to:
+				- Loại: Con trỏ tới vùng bộ nhớ user space.
+				- Mô tả: Đích đến của dữ liệu.
+				- Macro __user: Chỉ thị con trỏ thuộc user space, yêu cầu kiểm tra bảo mật.
+			- const void *from:
+				- Loại: Con trỏ tới vùng bộ nhớ kernel.
+				- Mô tả: Nguồn dữ liệu trong kernel space.
+			- unsigned long n:
+				- Loại: Số nguyên không dấu.
+				- Mô tả: Số byte cần sao chép.
+		d. Giá trị trả về:
+			- 0: Thành công.
+			- > 0: Số byte không thể sao chép (lỗi).
+		e. Ví dụ sử dụng:
+			static ssize_t dev_read(struct file *file, char __user *buf, size_t len, loff_t *off) {
+			    char kernel_data[] = "Hello from kernel";
+			    if (copy_to_user(buf, kernel_data, strlen(kernel_data))) {
+			        return -EFAULT;
+			    }
+			    return strlen(kernel_data);
+			}
+
+	11. copy_from_user
+		a. Mô tả:
+			- Sao chép dữ liệu từ user space sang kernel space một cách an toàn.
+		b. Cú pháp:
+			- unsigned long copy_from_user(void *to, const void __user *from, unsigned long n);
+		c. Arguments:
+			- void *to:
+				- Loại: Con trỏ tới vùng bộ nhớ kernel.
+				- Mô tả: Đích đến của dữ liệu.
+			- const void __user *from:
+				- Loại: Con trỏ tới vùng bộ nhớ user space.
+				- Mô tả: Nguồn dữ liệu.
+				- Macro __user: Như mô tả ở copy_to_user.
+			- unsigned long n:
+				- Loại: Số nguyên không dấu.
+				- Mô tả: Số byte cần sao chép.
+		d. Giá trị trả về:
+			- 0: Thành công.
+			- > 0: Số byte không thể sao chép (lỗi).
+		e. Ví dụ sử dụng:
+			static ssize_t dev_write(struct file *file, const char __user *buf, size_t len, loff_t *off) {
+			    char kernel_buffer[1024];
+			    if (len > sizeof(kernel_buffer)) len = sizeof(kernel_buffer);
+			    if (copy_from_user(kernel_buffer, buf, len)) {
+			        return -EFAULT;
+			    }
+			    printk(KERN_INFO "Received: %.*s\n", (int)len, kernel_buffer);
+			    return len;
+			}
+
+----Phần 4.2.2: API cho Platform Device và Platform Driver----
+
+	1. platform_device_register
+		a. Mô tả:
+			- Đăng ký một platform device với kernel.
+		b. Cú pháp:
+			- int platform_device_register(struct platform_device *pdev);
+		c. Arguments:
+			- struct platform_device *pdev:
+				- Loại: Con trỏ tới struct platform_device.
+				- Mô tả: Đại diện cho thiết bị phần cứng không tự phát hiện.
+				- Cấu trúc struct platform_device:
+					struct platform_device {
+					    const char *name; // Tên thiết bị
+					    int id; // ID thiết bị
+					    struct resource *resource; // Tài nguyên (bộ nhớ, IRQ)
+					    unsigned int num_resources; // Số tài nguyên
+					    void *dev.platform_data; // Dữ liệu tùy chỉnh
+					    // Các trường khác...
+					};
+		d. Giá trị trả về:
+			- 0: Thành công.
+			- < 0: Lỗi (ví dụ: -ENOMEM).
+		e. Ví dụ sử dụng:
+			#include <linux/platform_device.h>
+
+			static struct resource my_resources[] = {
+			    { .start = 0x10000000, .end = 0x10000FFF, .flags = IORESOURCE_MEM },
+			};
+
+			static struct platform_device my_device = {
+			    .name = "my-serial",
+			    .id = -1,
+			    .resource = my_resources,
+			    .num_resources = ARRAY_SIZE(my_resources),
+			};
+
+			static int __init my_dev_init(void) {
+			    return platform_device_register(&my_device);
+			}
+
+	2. platform_device_unregister
+		a. Mô tả:
+			- Gỡ platform device khỏi kernel.
+		b. Cú pháp:
+			- void platform_device_unregister(struct platform_device *pdev);
+		c. Arguments:
+			- struct platform_device *pdev:
+				- Loại: Con trỏ tới struct platform_device.
+				- Mô tả: Platform device đã được đăng ký.
+				- Cấu trúc struct platform_device: Như mô tả ở platform_device_register.
+		d. Giá trị trả về:
+			- Không có (void).
+		e. Ví dụ sử dụng:
+			static void __exit my_dev_exit(void) {
+			    platform_device_unregister(&my_device);
+			    printk(KERN_INFO "Platform device unregistered\n");
+			}
+
+	3. platform_driver_register
+		a. Mô tả:
+			- Đăng ký platform driver với kernel.
+		b. Cú pháp:
+			- int platform_driver_register(struct platform_driver *drv);
+		c. Arguments:
+			- struct platform_driver *drv:
+				- Loại: Con trỏ tới struct platform_driver.
+				- Mô tả: Driver điều khiển platform device.
+				- Cấu trúc struct platform_driver:
+					struct platform_driver {
+					    int (*probe)(struct platform_device *); // Khởi tạo thiết bị
+					    int (*remove)(struct platform_device *); // Gỡ thiết bị
+					    void (*shutdown)(struct platform_device *); // Tắt thiết bị
+					    int (*suspend)(struct platform_device *, pm_message_t state); // Tiết kiệm năng lượng
+					    int (*resume)(struct platform_device *); // Phục hồi
+					    struct device_driver driver; // Thông tin driver
+					    const struct of_device_id *of_match_table; // Bảng khớp Device Tree
+					};
+					
+						- struct device_driver:
+							struct device_driver {
+							    const char *name; // Tên driver
+							    // Các trường khác...
+							};
+		d. Giá trị trả về:
+			- 0: Thành công.
+			- < 0: Lỗi (ví dụ: -ENOMEM).
+		e. Ví dụ sử dụng:
+			#include <linux/platform_device.h>
+
+			static struct platform_driver my_driver = {
+			    .probe = my_probe,
+			    .remove = my_remove,
+			    .driver = { .name = "my-serial" },
+			};
+
+			static int __init my_driver_init(void) {
+			    return platform_driver_register(&my_driver);
+			}
+
+	4. platform_driver_unregister
+		a. Mô tả:
+			- Gỡ platform driver khỏi kernel.
+		b. Cú pháp:
+			- void platform_driver_unregister(struct platform_driver *drv);
+		c. Arguments:
+			- struct platform_driver *drv:
+				- Loại: Con trỏ tới struct platform_driver.
+				- Mô tả: Driver đã được đăng ký.
+				- Cấu trúc struct platform_driver: Như mô tả ở platform_driver_register.
+		d. Giá trị trả về:
+			- Không có (void).
+		e. Ví dụ sử dụng:
+			static void __exit my_driver_exit(void) {
+			    platform_driver_unregister(&my_driver);
+			    printk(KERN_INFO "Platform driver unregistered\n");
+			}
+
+	5. platform_get_resource
+		a. Mô tả:
+			- Lấy tài nguyên (bộ nhớ, IRQ) từ platform device.
+		b. Cú pháp:
+			- struct resource *platform_get_resource(struct platform_device *dev, unsigned int type, unsigned int num);
+		c. Arguments:
+			- struct platform_device *dev:
+				- Loại: Con trỏ tới struct platform_device.
+				- Mô tả: Platform device chứa tài nguyên.
+				- Cấu trúc struct platform_device: Như trước.
+			- unsigned int type:
+				- Loại: Số nguyên không dấu.
+				- Mô tả: Loại tài nguyên (IORESOURCE_MEM, IORESOURCE_IRQ, v.v.).
+				- Macro liên quan:
+					- IORESOURCE_MEM: Tài nguyên bộ nhớ.
+					- IORESOURCE_IRQ: Tài nguyên ngắt.
+			- unsigned int num:
+				- Loại: Số nguyên không dấu.
+				- Mô tả: Chỉ số tài nguyên (thứ tự trong mảng resource).
+		d. Giá trị trả về:
+			- Con trỏ tới struct resource nếu thành công.
+			- NULL nếu không tìm thấy tài nguyên.
+			- Cấu trúc struct resource:
+				struct resource {
+				    resource_size_t start; // Địa chỉ bắt đầu
+				    resource_size_t end; // Địa chỉ kết thúc
+				    const char *name; // Tên tài nguyên
+				    unsigned long flags; // Loại tài nguyên (IORESOURCE_*)
+				    // Các trường khác...
+				};
+		e. Ví dụ sử dụng:
+			static int my_probe(struct platform_device *pdev) {
+			    struct resource *res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+			    if (!res) {
+			        printk(KERN_ERR "Failed to get memory resource\n");
+			        return -ENODEV;
+			    }
+			    printk(KERN_INFO "Memory: 0x%llx-0x%llx\n", res->start, res->end);
+			    return 0;
+			}
+
+	6. platform_get_irq
+		a. Mô tả:
+			- Lấy số IRQ từ platform device.
+		b. Cú pháp:
+			- int platform_get_irq(struct platform_device *dev, unsigned int num);
+		c. Arguments:
+			- struct platform_device *dev:
+				- Loại: Con trỏ tới struct platform_device.
+				- Mô tả: Platform device chứa tài nguyên IRQ.
+				- Cấu trúc struct platform_device: Như trước.
+			- unsigned int num:
+				- Loại: Số nguyên không dấu.
+				- Mô tả: Chỉ số IRQ trong danh sách tài nguyên.
+		d. Giá trị trả về:
+			- Số IRQ (số nguyên dương) nếu thành công.
+			- < 0: Lỗi (ví dụ: -ENXIO nếu IRQ không tồn tại).
+		e. Ví dụ sử dụng:
+			static int my_probe(struct platform_device *pdev) {
+			    int irq = platform_get_irq(pdev, 0);
+			    if (irq < 0) {
+			        printk(KERN_ERR "Failed to get IRQ\n");
+			        return irq;
+			    }
+			    printk(KERN_INFO "IRQ: %d\n", irq);
+			    return 0;
+			}
+
+	7. ioremap
+		a. Mô tả:
+			- Ánh xạ vùng bộ nhớ phần cứng vào không gian địa chỉ kernel.
+		b. Cú pháp:
+			- void __iomem *ioremap(phys_addr_t offset, unsigned long size);
+		c. Arguments:
+			- phys_addr_t offset:
+				- Loại: Địa chỉ vật lý (64-bit hoặc 32-bit tùy kiến trúc).
+				- Mô tả: Địa chỉ bắt đầu của vùng bộ nhớ phần cứng.
+			- unsigned long size:
+				- Loại: Số nguyên không dấu.
+				- Mô tả: Kích thước vùng bộ nhớ cần ánh xạ (byte).
+			- void __iomem * (giá trị trả về):
+				- Macro __iomem: Chỉ thị con trỏ tới vùng bộ nhớ I/O, yêu cầu sử dụng hàm ioread*/iowrite*.
+		d. Giá trị trả về:
+			- Con trỏ tới vùng bộ nhớ đã ánh xạ nếu thành công.
+			- NULL nếu thất bại.
+		e. Ví dụ sử dụng:
+			static void __iomem *base_addr;
+
+			static int my_probe(struct platform_device *pdev) {
+			    struct resource *res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+			    base_addr = ioremap(res->start, resource_size(res));
+			    if (!base_addr) {
+			        printk(KERN_ERR "Failed to map memory\n");
+			        return -ENOMEM;
+			    }
+			    return 0;
+			}
+
+	8. iounmap
+		a. Mô tả:
+			- Hủy ánh xạ vùng bộ nhớ đã tạo bằng ioremap.
+		b. Cú pháp:
+			- void iounmap(volatile void __iomem *addr);
+		c. Arguments:
+			- volatile void __iomem *addr:
+				- Loại: Con trỏ tới vùng bộ nhớ đã ánh xạ.
+				- Mô tả: Địa chỉ trả về từ ioremap.
+				- Macro __iomem: Như mô tả ở ioremap.
+		d. Giá trị trả về:
+			- Không có (void).
+		e. Ví dụ sử dụng:
+			static void my_remove(struct platform_device *pdev) {
+			    iounmap(base_addr);
+			    printk(KERN_INFO "Memory unmapped\n");
+			}
+
+	9. request_irq
+		a. Mô tả:
+			- Đăng ký hàm xử lý ngắt cho một IRQ.
+		b. Cú pháp:
+			- int request_irq(unsigned int irq, irq_handler_t handler, unsigned long flags, const char *name, void *dev);
+		c. Arguments:
+			- unsigned int irq:
+				- Loại: Số nguyên không dấu.
+				- Mô tả: Số IRQ (thường lấy từ platform_get_irq).
+			- irq_handler_t handler:
+				- Loại: Con trỏ hàm.
+				- Mô tả: Hàm xử lý ngắt.
+				- Cấu trúc irq_handler_t:
+					- typedef irqreturn_t (*irq_handler_t)(int, void *);
+						- Tham số: IRQ number và con trỏ dữ liệu (dev).
+						- Trả về: IRQ_HANDLED hoặc IRQ_NONE.
+			- unsigned long flags:
+				- Loại: Số nguyên không dấu.
+				- Mô tả: Cờ cấu hình ngắt (ví dụ: IRQF_SHARED để chia sẻ IRQ).
+				- Macro liên quan:
+					- IRQF_SHARED: Cho phép nhiều driver dùng chung IRQ.
+					- IRQF_TRIGGER_RISING: Kích hoạt ngắt trên cạnh lên.
+			- const char *name:
+				- Loại: Chuỗi ký tự.
+				- Mô tả: Tên ngắt, hiển thị trong /proc/interrupts.
+			- void *dev:
+				- Loại: Con trỏ void.
+				- Mô tả: Dữ liệu truyền vào hàm xử lý ngắt (thường là struct platform_device *).
+		d. Giá trị trả về:
+			- 0: Thành công.
+			- < 0: Lỗi (ví dụ: -EBUSY nếu IRQ đã được dùng).
+		e. Ví dụ sử dụng:
+			static irqreturn_t my_irq_handler(int num, void *dev_id) {
+			    printk(KERN_INFO "IRQ handled\n");
+			    return IRQ_HANDLED;
+			}
+
+			static int my_probe(struct platform_device *pdev) {
+			    int irq = platform_get_irq(pdev, 0);
+			    if (request_irq(irq, my_irq_handler, IRQF_SHARED, "my-serial", pdev) < 0) {
+			        printk(KERN_ERR "Failed to request IRQ\n");
+			        return -EBUSY;
+			    }
+			    return 0;
+			}
+
+	10. free_irq
+		a. Mô tả:
+			- Giải phóng ngắt đã đăng ký bằng request_irq.
+		b. Cú pháp:
+			- void free_irq(unsigned int irq, void *dev_id);
+		c. Arguments:
+			- unsigned int:
+				- Loại: Số nguyên không dấu.
+				- Mô tả: Số IRQ đã đăng ký.
+			- void *dev_id:
+				- Loại: Con trỏ void.
+				- Mô tả: Dữ liệu đã truyền vào request_irq, dùng để xác định handler.
+		d. Giá trị trả về:
+			- Không có (void).
+		e. Ví dụ sử dụng:
+			static void my_remove(struct platform_device *pdev) {
+			    int irq = platform_get_irq(pdev, 0);
+			    free_irq(irq, pdev);
+			    printk(KERN_INFO "IRQ freed\n");
+			}
