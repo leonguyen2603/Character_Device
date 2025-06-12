@@ -244,3 +244,200 @@ Trong ngữ cảnh character device driver, ioctl cho phép ứng dụng user sp
 	Vai trò				Cung cấp thông tin phần cứng.						Thực hiện logic (khởi tạo, đọc/ghi, ngắt).
 	Khớp				Dựa trên name hoặc compatible.						Dựa trên driver.name hoặc of_match_table
 
+========== Note ==========
+
+---- Major và Minor ----
+
+	1. Định nghĩa Major và Minor Number
+		a. Major Number:
+			- Là một số nguyên (12-bit, giá trị từ 0 đến 4095) dùng để xác định driver hoặc loại thiết bị trong kernel.
+			- Mỗi major number ánh xạ đến một driver (hoặc một nhóm thiết bị được điều khiển bởi cùng driver).
+			- Ví dụ: Major number 4 thường được dùng cho thiết bị TTY (/dev/tty*).
+
+		b. Minor Number:
+		- Là một số nguyên (20-bit, giá trị từ 0 đến 1048575) dùng để phân biệt các thiết bị cụ thể được điều khiển bởi cùng một driver (cùng major number).
+		- Minor number giúp kernel xác định thiết bị cụ thể hoặc instance của thiết bị trong driver.
+		- Ví dụ: /dev/tty0 và /dev/tty1 có cùng major number 4 nhưng minor number khác nhau (0 và 1).
+
+		c. Kết hợp:
+			- Major và minor number được kết hợp trong một kiểu dữ liệu dev_t (32-bit), với:
+				- 12 bit cho major number.
+				- 20 bit cho minor number.
+		d. Các macro liên quan:
+			- MAJOR(dev_t dev): Trích xuất major number từ dev_t.
+			- MINOR(dev_t dev): Trích xuất minor number từ dev_t.
+			- MKDEV(int major, int minor): Tạo dev_t từ major và minor number.
+		e. Ví dụ:
+			dev_t dev = MKDEV(250, 5);
+			printk(KERN_INFO "Major: %d, Minor: %d\n", MAJOR(dev), MINOR(dev));
+			// Output: Major: 250, Minor: 5
+
+	2. Vai trò của Major và Minor Number
+		a. Major Number:
+			- Ánh xạ driver: Kernel sử dụng major number để tìm driver tương ứng khi user space truy cập thiết bị (qua /dev).
+			- Đăng ký driver: Khi driver đăng ký với kernel (dùng alloc_chrdev_region hoặc register_chrdev_region), major number được gán để liên kết driver với thiết bị.
+			- Hiển thị trong /proc/devices: Major number và tên driver xuất hiện trong /proc/devices để quản lý.
+				cat /proc/devices
+				# Output:
+				# Character devices:
+				#   4 tty
+				# 250 my_device
+		b. Minor Number:
+			- Phân biệt thiết bị: Dùng để xác định instance cụ thể của thiết bị (ví dụ: /dev/sda1, /dev/sda2 có cùng major number nhưng minor number khác).
+			- Tùy thuộc driver: Driver quyết định cách sử dụng minor number (ví dụ: để phân biệt các kênh, cổng, hoặc chế độ hoạt động).
+			- Hỗ trợ nhiều thiết bị: Một driver có thể quản lý nhiều thiết bị với cùng major number nhưng minor number khác nhau.
+		c. Ví dụ thực tế:
+			- Thiết bị /dev/ttyS0 (serial port):
+				Major number: 4 (driver TTY).
+				Minor number: 64 (cổng serial cụ thể).
+			- Xem thông tin:
+				ls -l /dev/ttyS0
+				# Output: crw-rw---- 1 root dialout 4, 64 Jun 12 11:01 /dev/ttyS0
+
+	3. Cách Kernel Quản lý Major và Minor Number
+		a. Cấu trúc dev_t:
+			- dev_t là kiểu dữ liệu 32-bit, lưu trữ cả major và minor number.
+			- Kernel dùng các macro (MAJOR, MINOR, MKDEV) để thao tác với dev_t.
+			- Ví dụ:
+				dev_t dev = MKDEV(200, 10);
+				if (MAJOR(dev) == 200 && MINOR(dev) == 10) {
+				    printk(KERN_INFO "Device number valid\n");
+				}
+		b. Hệ thống tệp /dev:
+			- Tệp thiết bị trong /dev (như /dev/my_device) ánh xạ đến major và minor number.
+			- Udev hoặc mknod tạo các tệp này dựa trên major/minor được đăng ký bởi driver.
+			- Ví dụ: Tạo tệp thiết bị thủ công:
+				mknod /dev/my_device c 250 0
+				# c: character device, 250: major, 0: minor
+		c. Quản lý trong kernel:
+			- Kernel duy trì một bảng ánh xạ major number với driver (qua chrdevs).
+			- Khi user space mở một tệp thiết bị (ví dụ: open("/dev/my_device", O_RDWR)), kernel:
+				- Đọc major/minor từ inode của tệp.
+				- Tìm driver tương ứng qua major number.
+				- Gọi hàm trong file_operations của driver, truyền minor number để xử lý thiết bị cụ thể.
+			- /proc/devices hiển thị danh sách major number đã đăng ký.
+		d. Cấp phát:
+			- Động: Dùng alloc_chrdev_region để kernel tự chọn major number khả dụng.
+				alloc_chrdev_region(&dev_num, 0, 1, "my_device");
+			- Tĩnh: Dùng register_chrdev_region để chỉ định major/minor cụ thể.
+				dev_t dev = MKDEV(250, 0);
+				register_chrdev_region(dev, 1, "my_device");
+
+	4. Cách Sử dụng Major và Minor Number trong Driver
+	4.1. Đăng ký Major/Minor
+		a. API liên quan: alloc_chrdev_region, register_chrdev_region, unregister_chrdev_region.
+		b. Quy trình:
+			- Cấp phát major/minor:
+				dev_t dev_num;
+				alloc_chrdev_region(&dev_num, 0, 1, "my_device");
+			- Liên kết với struct cdev:
+				cdev_add(&cdev, dev_num, 1);
+			- Giải phóng khi gỡ driver:
+				unregister_chrdev_region(dev_num, 1);
+	4.2. Sử dụng Minor Number trong Driver
+		a. Driver có thể dùng minor number để phân biệt các thiết bị hoặc chế độ:
+			- Ví dụ: Một driver quản lý nhiều cổng serial (/dev/serial0, /dev/serial1) dùng minor number để chọn cổng.
+			- Trong hàm file_operations, minor number được lấy từ struct inode:
+				static int dev_open(struct inode *inode, struct file *file) {
+				    unsigned int minor = MINOR(inode->i_rdev);
+				    printk(KERN_INFO "Opened device with minor: %d\n", minor);
+				    return 0;
+				}
+	4.3. Ví dụ Mã Driver
+		#include <linux/fs.h>
+		#include <linux/cdev.h>
+
+		static dev_t dev_num;
+		static struct cdev cdev;
+		static struct class *dev_class;
+
+		static struct file_operations fops = {
+		    .open = dev_open,
+		};
+
+		static int dev_open(struct inode *inode, struct file *file) {
+		    printk(KERN_INFO "Device opened, Major: %d, Minor: %d\n",
+		           MAJOR(inode->i_rdev), MINOR(inode->i_rdev));
+		    return 0;
+		}
+
+		static int __init my_driver_init(void) {
+		    // Cấp phát major/minor
+		    if (alloc_chrdev_region(&dev_num, 0, 1, "my_device") < 0) {
+		        printk(KERN_ERR "Failed to allocate device number\n");
+		        return -1;
+		    }
+		    // Khởi tạo cdev
+		    cdev_init(&cdev, &fops);
+		    cdev.owner = THIS_MODULE;
+		    if (cdev_add(&cdev, dev_num, 1) < 0) {
+		        unregister_chrdev_region(dev_num, 1);
+		        return -1;
+		    }
+		    // Tạo class và device
+		    dev_class = class_create(THIS_MODULE, "my_class");
+		    device_create(dev_class, NULL, dev_num, NULL, "my_device");
+		    return 0;
+		}
+
+		static void __exit my_driver_exit(void) {
+		    device_destroy(dev_class, dev_num);
+		    class_destroy(dev_class);
+		    cdev_del(&cdev);
+		    unregister_chrdev_region(dev_num, 1);
+		}
+
+		Giải thích:
+			- Driver cấp phát major/minor bằng alloc_chrdev_region.
+			- In major/minor trong dev_open.
+			- Tạo /dev/my_device để user space truy cập.
+	4.4. Kiểm tra Major/Minor
+		a. Sau khi tải driver:
+			cat /proc/devices
+			# Output: 250 my_device
+			ls -l /dev/my_device
+			# Output: crw------- 1 root root 250, 0 Jun 12 11:01 /dev/my_device
+
+	5. Các Lưu ý Quan trọng khi Làm Việc với Major và Minor Number
+		a. Tránh xung đột:
+			- Dùng alloc_chrdev_region để tránh xung đột major number.
+			- Nếu dùng register_chrdev_region, kiểm tra /proc/devices trước để đảm bảo major number chưa được dùng.
+		b. Dọn dẹp tài nguyên:
+			- Luôn gọi unregister_chrdev_region khi gỡ driver để giải phóng major/minor.
+			- Ví dụ:
+			if (cdev_add(&cdev, dev_num, 1) < 0) {
+			    unregister_chrdev_region(dev_num, 1);
+			    return -1;
+			}
+		c. Minor number trong driver:
+			- Thiết kế driver để xử lý nhiều minor number nếu cần hỗ trợ nhiều thiết bị.
+			- Ví dụ: Dùng mảng hoặc danh sách liên kết để lưu trạng thái của từng minor number.
+		d. Tương thích udev:
+			- Dùng class_create và device_create để udev tự động tạo /dev/my_device với major/minor đúng.
+		e. Giới hạn:
+			- Major number giới hạn ở 0-4095, minor number ở 0-1048575.
+			- Một số major number được dành sẵn (xem Documentation/admin-guide/devices.txt).
+
+	6. Liên hệ với API đã Thảo luận
+		a. alloc_chrdev_region / register_chrdev_region:
+			- Cấp phát major/minor, lưu vào dev_t.
+			- alloc_chrdev_region thường dùng hơn vì tránh xung đột.
+		b. cdev_add:
+			- Liên kết struct cdev với major/minor, kích hoạt driver.
+		c. unregister_chrdev_region:
+			- Giải phóng major/minor khi gỡ driver.
+		d. device_create:
+		 	- Tạo tệp /dev với major/minor được chỉ định.
+		e. Ví dụ luồng sử dụng:
+			- Cấp phát: alloc_chrdev_region(&dev_num, 0, 1, "my_device").
+			- Liên kết: cdev_add(&cdev, dev_num, 1).
+			- Tạo /dev: device_create(dev_class, NULL, dev_num, NULL, "my_device").
+			- Dọn dẹp: device_destroy, cdev_del, unregister_chrdev_region.
+
+	7. Các Câu Hỏi Thường Gặp
+		a. Tại sao cần cả major và minor number?
+			- Major number ánh xạ đến driver, minor number xác định thiết bị cụ thể, giúp kernel quản lý nhiều thiết bị với ít driver.
+		b. Làm sao biết major number nào đã dùng?
+			- Xem /proc/devices hoặc Documentation/admin-guide/devices.txt.
+		Có thể dùng cùng major number cho nhiều driver không?
+			- Không, mỗi major number chỉ ánh xạ đến một driver. Dùng alloc_chrdev_region để tránh xung đột.
