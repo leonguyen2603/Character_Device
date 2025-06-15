@@ -196,10 +196,10 @@ Trong ngữ cảnh character device driver, ioctl cho phép ứng dụng user sp
 		- Platform Driver là một kernel driver chịu trách nhiệm điều khiển một platform device. Nó cung cấp logic để khởi tạo, cấu hình, và tương tác với phần cứng được mô tả bởi platform device.
 		- Platform driver khớp với platform device dựa trên tên hoặc chuỗi compatible (trong Device Tree).
 	b. Vai trò:
-		Khởi tạo thiết bị: Thiết lập phần cứng (ví dụ: bật nguồn, cấu hình thanh ghi).
-		Xử lý ngắt: Đăng ký và xử lý các ngắt từ phần cứng.
-		Thực hiện thao tác: Cung cấp giao diện (như read, write, ioctl) để user space tương tác với thiết bị.
-		Dọn dẹp: Tắt thiết bị và giải phóng tài nguyên khi gỡ driver.
+		- Khởi tạo thiết bị: Thiết lập phần cứng (ví dụ: bật nguồn, cấu hình thanh ghi).
+		- Xử lý ngắt: Đăng ký và xử lý các ngắt từ phần cứng.
+		- Thực hiện thao tác: Cung cấp giao diện (như read, write, ioctl) để user space tương tác với thiết bị.
+		- Dọn dẹp: Tắt thiết bị và giải phóng tài nguyên khi gỡ driver.
 	c. Cấu trúc platform_driver:
 		struct platform_driver {
 		    int (*probe)(struct platform_device *); // Gọi khi thiết bị khớp
