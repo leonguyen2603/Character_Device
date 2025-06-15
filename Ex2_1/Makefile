@@ -49,9 +49,6 @@ log:
 
 #  To view kernel messages, run:
 #  make log
-
-#  To create a character device node, run:
-#  sudo mknod /dev/mychardev c <major> 0
  
 #  To set permissions for the device node, run:
 #  sudo chmod 666 /dev/mychardev.
