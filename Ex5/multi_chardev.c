@@ -5,7 +5,7 @@
 #include <linux/device.h>
 #include <linux/uaccess.h>
 
-#define DEVICE_NAME "mychardev"
+#define DEVICE_NAME "Ex5_chardev"
 #define DEVICE_COUNT 5
 #define BUF_SIZE 1024
 
@@ -26,14 +26,14 @@ static int my_open(struct inode *inode, struct file *file)
 {
     int minor = iminor(inode); // Get the minor number
     file->private_data = &devices[minor]; // Set the private data
-    printk(KERN_INFO "mychardev%d: Device opened\n", minor);
+    printk(KERN_INFO "Ex5_chardev%d: Device opened\n", minor);
     return 0;
 }
 
 static int my_release(struct inode *inode, struct file *file)
 {
     int minor = iminor(inode);
-    printk(KERN_INFO "mychardev%d: Device closed\n", minor);
+    printk(KERN_INFO "Ex5_chardev%d: Device closed\n", minor);
     return 0;
 }
 
@@ -47,7 +47,7 @@ static ssize_t my_write(struct file *file, const char __user *buf, size_t len, l
         return -EFAULT;
 
     dev->buffer_len = len;
-    printk(KERN_INFO "mychardev: Received %d bytes\n", dev->buffer_len);
+    printk(KERN_INFO "Ex5_chardev: Received %d bytes\n", dev->buffer_len);
     return len;
 }
 
@@ -62,7 +62,7 @@ static ssize_t my_read(struct file *file, char __user *buf, size_t len, loff_t *
         return -EFAULT;
 
     *offset += len;
-    printk(KERN_INFO "mychardev: Sent %ld bytes\n", len);
+    printk(KERN_INFO "Ex5_chardev: Sent %ld bytes\n", len);
     return len;
 }
 
@@ -82,12 +82,14 @@ static int __init multi_chardev_init(void)
     if (ret < 0) return ret;
     // Create a class
     my_class = class_create("my_multi_class");
-    if (IS_ERR(my_class)) {
+    if (IS_ERR(my_class)) 
+    {
         unregister_chrdev_region(dev_number, DEVICE_COUNT);
         return PTR_ERR(my_class);
     }
     // Create devices
-    for (i = 0; i < DEVICE_COUNT; i++) {
+    for (i = 0; i < DEVICE_COUNT; i++) 
+    {
         cdev_init(&devices[i].cdev, &fops); // Initialize the cdev
         devices[i].cdev.owner = THIS_MODULE; // Set the owner
         devices[i].buffer_len = 0;
@@ -121,7 +123,7 @@ static int __init multi_chardev_init(void)
         }
     }
 
-    printk(KERN_INFO "mychardev: Multi-device driver loaded\n");
+    printk(KERN_INFO "Ex5_chardev: Multi-device driver loaded\n");
     return 0;
 }
 
@@ -135,7 +137,7 @@ static void __exit multi_chardev_exit(void)
     }
     class_destroy(my_class); // Destroy the class
     unregister_chrdev_region(dev_number, DEVICE_COUNT); // Unregister the device
-    printk(KERN_INFO "mychardev: Multi-device driver unloaded\n");
+    printk(KERN_INFO "Ex5_chardev: Multi-device driver unloaded\n");
 }
 
 module_init(multi_chardev_init);

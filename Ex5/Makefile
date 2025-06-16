@@ -13,7 +13,7 @@ unload:
 	sudo rmmod multi_chardev
 
 list:
-	ls -l /dev/mychardev*
+	ls -l /dev/Ex5_chardev*
 
 log:
 	sudo dmesg -W
@@ -23,13 +23,13 @@ log:
 
 # make
 # make load
-# ls /dev/mychardev*
-# # /dev/mychardev0 → /dev/mychardev4
+# ls /dev/Ex5_chardev*
+# # /dev/Ex5_chardev0 → /dev/Ex5_chardev4
 
-# sudo chmod 666 /dev/mychardev*
+# sudo chmod 666 /dev/Ex5_chardev*
 
-# echo "Hello 0" > /dev/mychardev0
-# command cat /dev/mychardev0
+# echo "Hello 0" > /dev/Ex5_chardev0
+# command cat /dev/Ex5_chardev0
 
-# echo "World 1" > /dev/mychardev1
-# command cat /dev/mychardev1
+# echo "World 1" > /dev/Ex5_chardev1
+# command cat /dev/Ex5_chardev1
