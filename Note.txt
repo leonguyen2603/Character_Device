@@ -253,3 +253,7 @@
 		- Kiểm tra lỗi và dọn dẹp tài nguyên trong các nhánh lỗi.
 		- Đảm bảo đồng bộ khi truy cập tài nguyên chia sẻ (dùng spinlock/mutex).
 		- Sử dụng managed API (devm_*) để giảm nguy cơ rò rỉ tài nguyên.
+
+
+
+

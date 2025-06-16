@@ -1,8 +1,8 @@
-#include <linux/module.h> // Include necessary headers
-#include <linux/init.h> // for module initialization and cleanup
-#include <linux/fs.h> // for file operations
-#include <linux/cdev.h> // for character device operations
-#include <linux/uaccess.h> // for user space access functions: 
+#include <linux/module.h> // module_init, module_exit
+#include <linux/init.h> // functions: module_init, module_exit, MODULE_LICENSE, MODULE_AUTHOR, MODULE_DESCRIPTION
+#include <linux/fs.h> // for file operations: open, release, read, write
+#include <linux/cdev.h> // cdev_init, cdev_add, cdev_del
+#include <linux/uaccess.h> // copy_from_user, copy_to_user
 
 #define DEVICE_NAME "mychardev" // Define the device name
 

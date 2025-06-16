@@ -51,15 +51,18 @@ static ssize_t my_read(struct file *file, char __user *buf, size_t len, loff_t *
     return len;
 }
 
+// IOCTL handler
 static long my_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
-    switch (cmd) {
+    switch (cmd) 
+    {
+        // Clear the buffer
         case CLEAR_BUFFER:
             memset(kernel_buffer, 0, BUF_SIZE);
             buffer_len = 0;
             printk(KERN_INFO "mychardev_3: Buffer cleared\n");
             break;
-
+        // Get the size of the buffer
         case GET_SIZE:
             if (copy_to_user((int __user *)arg, &buffer_len, sizeof(int)))
                 return -EFAULT;

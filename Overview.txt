@@ -115,7 +115,7 @@
 ****Ioctl****
 ----1. Định nghĩa----
 ioctl (input/output control) là một system call trong Linux được sử dụng để thực hiện các thao tác điều khiển đặc biệt trên thiết bị (character devices, block devices, hoặc các tệp khác) mà các system call thông thường như read() hoặc write() không thể thực hiện.
-Trong ngữ cảnh character device driver, ioctl cho phép ứng dụng user space gửi các lệnh cụ thể đến driver để cấu hình thiết bị, truy vấn trạng thái, hoặc thực hiện các hành động đặc biệt.
+Trong ngữ cảnh character device driver, ioctl cho phép ứng dụng user space gửi các lệnh cụ thể đến driver để cấu hình thiết bị, truy vấn trạng thái, hoặc thực hiện các hành động đặc biệt
 
 ----2. Vai trò----
 	- Điều khiển thiết bị: Ví dụ, đặt tốc độ baud rate cho cổng serial, bật/tắt chế độ echo trên terminal, hoặc reset thiết bị.

@@ -1,9 +1,9 @@
-#include <linux/module.h>
-#include <linux/init.h>
-#include <linux/fs.h>
-#include <linux/cdev.h>
-#include <linux/device.h>
-#include <linux/uaccess.h>
+#include <linux/module.h> // module_init, module_exit, MODULE_LICENSE, MODULE_AUTHOR, MODULE_DESCRIPTION
+#include <linux/init.h> // __init, __exit
+#include <linux/fs.h> // file operations: open, release, read, write
+#include <linux/cdev.h> // cdev_init, cdev_add, cdev_del
+#include <linux/device.h> // class_create, device_create, device_destroy, class_destroy
+#include <linux/uaccess.h> // copy_from_user, copy_to_user
 
 #define DEVICE_NAME "Ex5_chardev"
 #define DEVICE_COUNT 5
@@ -15,10 +15,10 @@ struct my_device_data {
     int buffer_len;
 };
 
-static dev_t dev_number;
-static struct class *my_class;
-static struct my_device_data devices[DEVICE_COUNT];
-static struct device *my_device_nodes[DEVICE_COUNT];
+static dev_t dev_number; // Device number
+static struct class *my_class; // Device class
+static struct my_device_data devices[DEVICE_COUNT]; // Array of device data structures
+static struct device *my_device_nodes[DEVICE_COUNT]; // Array of device nodes
 
 // Common file operations
 
@@ -39,7 +39,7 @@ static int my_release(struct inode *inode, struct file *file)
 
 static ssize_t my_write(struct file *file, const char __user *buf, size_t len, loff_t *offset)
 {
-    struct my_device_data *dev = file->private_data;
+    struct my_device_data *dev = file->private_data; // Get the device data from private_data
 
     if (len > BUF_SIZE) len = BUF_SIZE;
 
@@ -56,7 +56,7 @@ static ssize_t my_read(struct file *file, char __user *buf, size_t len, loff_t *
     struct my_device_data *dev = file->private_data;
 
     if (*offset >= dev->buffer_len) return 0;
-    if (len > dev->buffer_len - *offset) len = dev->buffer_len - *offset;
+    if (len > dev->buffer_len - *offset) len = dev->buffer_len - *offset; 
 
     if (copy_to_user(buf, dev->buffer + *offset, len))
         return -EFAULT;
@@ -78,7 +78,7 @@ static int __init multi_chardev_init(void)
 {
     int ret, i;
     // Allocate a device number
-    ret = alloc_chrdev_region(&dev_number, 0, DEVICE_COUNT, DEVICE_NAME); 
+    ret = alloc_chrdev_region(&dev_number, 0, DEVICE_COUNT, DEVICE_NAME); // Allocate a range of device numbers
     if (ret < 0) return ret;
     // Create a class
     my_class = class_create("my_multi_class");
